@@ -6,5 +6,11 @@ message Header {
     uint32 PayloadLen = 1;
     bool Stream = 2;
     string Endpoint = 3;
+
+    // Error that was returned by the endpoint.
     string EndpointError = 4;
+
+    // Request that the receiver of the packet close the underlying connection.
+    // If set, EndpointError must be != "", too.
+    bool Close = 5;
 }

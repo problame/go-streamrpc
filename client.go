@@ -6,7 +6,6 @@ import (
 	"net"
 	"github.com/pkg/errors"
 	"github.com/problame/go-streamrpc/internal/pdu"
-	"fmt"
 )
 
 type Client struct {
@@ -40,7 +39,7 @@ func NewClientOnConn(rwc io.ReadWriteCloser, config *ConnConfig) *Client {
 }
 
 func (c *Client) reconn() error {
-	if c.c == nil {
+	if !c.c.Valid() {
 		if c.cn == nil {
 			// for NewClientOnConn
 			return errors.New("cannot reconnect without connector")
@@ -58,7 +57,7 @@ func (c *Client) closeConn() {
 	if err := c.c.Close(); err != nil {
 		panic(err) // FIXME revise this when we have logging
 	}
-	c.c = nil
+	c.c = nil // not necessary, but provides clarity when debugging
 }
 
 type RemoteEndpointError struct {
@@ -69,30 +68,68 @@ func (e *RemoteEndpointError) Error() string {
 	return e.msg
 }
 
-func (c *Client) RequestReply(endpoint string, reqStructured *bytes.Buffer, reqStream io.Reader) (resStructured *bytes.Buffer, resStream *Stream, err error) {
+// RequestReply sends a request to a remote HandlerFunc and reads its response.
+//
+// If the endpoint handler returned an error, that error is returned as a *RemoteEndpointError.
+// Other returned errors are likely protocol or network errors.
+//
+// If the endpoint handler returns a *Stream, that stream must be Close()d by the caller.
+// Otherwise, RequestReply will block indefinitely.
+//
+// If reqStream != nil, reqStream will be read until an error e occurs with io.Copy semantics:
+// if e == io.EOF, RequestReply does not consider it an error and assumes all data in the stream has been sent.
+// If e != io.EOF, the endpoint handler will receive the bytes already copied followed by a *StreamError.
+// However, for neither case does RequestReply return an error (FIXME) to the caller.
+func (c *Client) RequestReply(endpoint string, reqStructured *bytes.Buffer, reqStream io.Reader) (*bytes.Buffer, *Stream, error) {
 
 	if err := c.reconn(); err != nil {
 		return nil, nil, err
 	}
 
-	hdr := pdu.Header{Endpoint: endpoint}
-	err = c.c.send(&hdr, reqStructured, reqStream)
-	if err != nil {
-		c.closeConn()
-		return nil, nil, err
+	type result struct {
+		r *recvResult // if err == nil, this must be != nil
+		err error
+		close bool
 	}
-	rhdr, resStructured, resStream, err := c.c.recv()
-	if err != nil {
-		c.closeConn()
-		return nil, nil, err
+	rchan := make(chan result, 2) // size 2 to avoid leaking goroutines while also not draining the channel (will be GCd)
+	go func() {
+		hdr := pdu.Header{Endpoint: endpoint}
+		err := c.c.send(&hdr, reqStructured, reqStream)
+		rchan <- result{nil, err, err != nil} // FIXME: always close is correct right now because c.c.send calls writeStream which hides error returned by reqStream. However, maybe we should in fact not hide that?
+	}()
+	go func() {
+		r := c.c.recv()
+		close := false
+		var err error = nil
+		if r.err != nil {
+			err = r.err
+			close = true
+		} else if r.header.Close && !(r.header.EndpointError != "") {
+			err = errors.New("protocol error: Close=true implies EndpointError!=")
+			close = true
+		} else if r.header.EndpointError != "" {
+			err = &RemoteEndpointError{msg: r.header.EndpointError}
+			close = r.header.Close
+		}
+		rchan <- result{r, err, close}
+	}()
+
+	var res result
+	for res = range rchan {
+		if res.close {
+			c.closeConn()
+		}
+		if res.err != nil {
+			return nil, nil, res.err
+		}
+		if res.r != nil {
+			break
+		}
 	}
-	if rhdr.EndpointError != "" {
-		return nil, nil, &RemoteEndpointError{msg: rhdr.EndpointError}
-	}
-	return resStructured, resStream, nil
+	return res.r.structured, res.r.stream, nil
 }
 
-func (c *Client) Close() error {
-	// FIXME
-	return fmt.Errorf("close not implemented")
+func (c *Client) Close() {
+	c.c.send(&pdu.Header{Close: true}, nil, nil)
+	c.closeConn()
 }

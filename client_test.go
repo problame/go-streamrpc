@@ -5,9 +5,10 @@ import (
 	"bytes"
 	"github.com/stretchr/testify/assert"
 	"io"
+	"net"
 )
 
-func TestClient_EchoRequestReply(t *testing.T) {
+func TestClientServer_Basic(t *testing.T) {
 
 	connConfig := ConnConfig{
 		RxStreamMaxChunkSize: 4*1024*1024,
@@ -15,8 +16,13 @@ func TestClient_EchoRequestReply(t *testing.T) {
 		RxStructuredMaxLen: 64*1024,
 		TxChunkSize: 4,
 	}
-	var buf bufferRWC
-	client :=  NewClientOnConn(&buf, &connConfig)
+
+	clientConn, serverConn := net.Pipe()
+
+	go ServeConn(serverConn, &connConfig, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.Reader) (*bytes.Buffer, io.Reader, error) {
+		return bytes.NewBufferString("this is the structured response"), bytes.NewBufferString("this is the streamed response"), nil
+	})
+	client :=  NewClientOnConn(clientConn, &connConfig)
 
 	in := bytes.NewBufferString("this is a test")
 	stream := bytes.NewBufferString("this is a stream")
@@ -24,12 +30,12 @@ func TestClient_EchoRequestReply(t *testing.T) {
 	out, outstream, err := client.RequestReply("foobar", in, stream)
 	assert.Nil(t, err)
 
-	assert.Equal(t, "this is a test", out.String())
+	assert.Equal(t, "this is the structured response", out.String())
 
 	var outstreamBuf bytes.Buffer
 	_, err = io.Copy(&outstreamBuf, outstream)
 	assert.Nil(t, err)
-	assert.Equal(t, "this is a stream", outstreamBuf.String())
+	assert.Equal(t, "this is the streamed response", outstreamBuf.String())
 
 }
 

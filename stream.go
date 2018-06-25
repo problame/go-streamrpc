@@ -112,7 +112,7 @@ type StreamError struct {
 	msg string
 }
 
-func (e StreamError) Error() string {
+func (e *StreamError) Error() string {
 	return e.msg
 }
 
@@ -167,9 +167,14 @@ func (r *streamReader) Read(p []byte) (n int, err error) {
 			r.e = err
 			return 0, r.e
 		}
-		r.e = StreamError{buf.String()}
+		r.e = &StreamError{buf.String()}
 		return 0, r.e
 	}
 
 	return 0, ChunkHeaderUnknownStatusError
+}
+
+func (r *streamReader) Consumed() bool {
+	_, isStreamError := r.e.(*StreamError)
+	return r.e == io.EOF || isStreamError
 }

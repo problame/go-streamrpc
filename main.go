@@ -35,6 +35,8 @@ func (c *ConnConfig) Validate() error {
 	return nil
 }
 
+// Conn gates access to the underlying io.ReadWriteCloser to ensure that we always speak correct wire protocol.
+// FIXME this is totally internal, right?
 type Conn struct {
 	c        io.ReadWriteCloser
 	config   *ConnConfig
@@ -52,14 +54,23 @@ func newConn(c io.ReadWriteCloser, config *ConnConfig) *Conn {
 	}
 }
 
-func (c *Conn) Close() error {
-	return c.c.Close()
+func (c *Conn) Valid() bool {
+	if c == nil { return false }
+	return c.c != nil
 }
 
+func (c *Conn) Close() error {
+	err := c.c.Close()
+	c.c = nil
+	return err
+}
+
+// Stream is a io.ReadCloser that provides access to the streamed part of a PDU packet.
+// A Stream must always be fully consumed, i.e., read until an error is returned or be closed.
+// Before a Stream is consumed, no new requests can be sent over the connection, and callers will block.
 type Stream struct {
 	r *streamReader
 	conn *Conn
-
 }
 
 func (s *Stream) Read(p []byte) (n int, err error) {
@@ -72,7 +83,26 @@ func (s *Stream) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
-func (c *Conn) recv() (header *pdu.Header, resStructured *bytes.Buffer, resStream *Stream, err error) {
+func (s *Stream) Close() error {
+	if s == nil {
+		return nil
+	}
+	if !s.r.Consumed() {
+		// There are still chunks on Conn that belong to this stream,
+		// hence the Conn is in unknown state and must be closed.
+		s.conn.Close()
+	}
+	return nil
+}
+
+type recvResult struct {
+	header     *pdu.Header
+	structured *bytes.Buffer
+	stream     *Stream
+	err        error
+}
+
+func (c *Conn) recv() (*recvResult) {
 	c.recvBusy.Lock()
 	unlockInStream := false
 	defer func() {
@@ -84,36 +114,35 @@ func (c *Conn) recv() (header *pdu.Header, resStructured *bytes.Buffer, resStrea
 
 	var hdrLen uint32
 	if err := binary.Read(c.c, binary.BigEndian, &hdrLen); err != nil {
-		// TODO close conn and invalidate client?
-		return nil, nil, nil, err
+		return &recvResult{nil, nil, nil, err}
 	}
 
 	if hdrLen > c.config.RxHeaderMaxLen {
-		// TODO close conn
-		return nil, nil, nil, errors.New("reply header exceeds allowed length")
+		return &recvResult{nil, nil, nil, errors.New("reply header exceeds allowed length")}
 	}
 
 	buf := bytes.NewBuffer(make([]byte, 0, hdrLen))
-	_, err = io.CopyN(buf, c.c, int64(hdrLen))
+	_, err := io.CopyN(buf, c.c, int64(hdrLen))
 	if err != nil {
-		return nil, nil, nil, err
+		return &recvResult{nil, nil, nil, err}
 	}
 
 	var unmarshHeader pdu.Header
 	if err := proto.Unmarshal(buf.Bytes(), &unmarshHeader); err != nil {
-		return nil, nil, nil, errors.New("could not unmarshal header")
+		return &recvResult{nil, nil, nil, errors.New("could not unmarshal header")}
 	}
 
 	if unmarshHeader.PayloadLen > c.config.RxStructuredMaxLen {
-		return &unmarshHeader, nil, nil, errors.New("reply structured part exceeds allowed length")
+		return &recvResult{&unmarshHeader, nil, nil, errors.New("reply structured part exceeds allowed length")}
 	}
 
-	resStructured = bytes.NewBuffer(make([]byte, 0, unmarshHeader.PayloadLen))
+	resStructured := bytes.NewBuffer(make([]byte, 0, unmarshHeader.PayloadLen))
 	_, err = io.CopyN(resStructured, c.c, int64(unmarshHeader.PayloadLen))
 	if err != nil {
-		return &unmarshHeader, nil, nil, err
+		return &recvResult{&unmarshHeader, nil, nil, err}
 	}
 
+	var resStream *Stream
 	if unmarshHeader.Stream {
 		unlockInStream = true
 		resStream = &Stream {
@@ -124,8 +153,7 @@ func (c *Conn) recv() (header *pdu.Header, resStructured *bytes.Buffer, resStrea
 		resStream = nil
 	}
 
-
-	return &unmarshHeader, resStructured, resStream, nil
+	return &recvResult{&unmarshHeader, resStructured, resStream, nil}
 }
 
 // fills in PayloadLen and Stream of pdu.Header
