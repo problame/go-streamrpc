@@ -1,0 +1,178 @@
+package streamrpc
+
+import (
+	_ "github.com/problame/go-streamrpc/internal/pdu"
+	"bytes"
+	"io"
+	"github.com/problame/go-streamrpc/internal/pdu"
+	"math"
+	"github.com/golang/protobuf/proto"
+	"encoding/binary"
+	"errors"
+	"sync"
+)
+
+type ConnConfig struct {
+	RxHeaderMaxLen uint32
+	RxStructuredMaxLen uint32
+	RxStreamMaxChunkSize uint32
+	TxChunkSize uint32
+}
+
+func (c *ConnConfig) Validate() error {
+	if c.TxChunkSize <= 0 {
+		return errors.New("TxChunkSize must be greater than 0")
+	}
+	if c.RxHeaderMaxLen <= 0 {
+		return errors.New("RxHeaderMaxLen must be greater than 0")
+	}
+	if c.RxStructuredMaxLen <= 0 {
+		return errors.New("RxStructuredMaxLen must be greater than 0")
+	}
+	if c.RxStreamMaxChunkSize <= 0 {
+		return errors.New("RxStreamMaxChunkSize must be greater than 0")
+	}
+	return nil
+}
+
+type Conn struct {
+	c        io.ReadWriteCloser
+	config   *ConnConfig
+	recvBusy sync.Mutex
+	sendBusy sync.Mutex
+}
+
+func newConn(c io.ReadWriteCloser, config *ConnConfig) *Conn {
+	if err := config.Validate(); err != nil {
+		panic(err)
+	}
+	return &Conn{
+		c: c,
+		config: config,
+	}
+}
+
+func (c *Conn) Close() error {
+	return c.c.Close()
+}
+
+type Stream struct {
+	r *streamReader
+	conn *Conn
+
+}
+
+func (s *Stream) Read(p []byte) (n int, err error) {
+	n, err = s.r.Read(p)
+	if err != nil {
+		s.conn.recvBusy.Unlock()
+		s.r = nil
+		s.conn = nil
+	}
+	return n, err
+}
+
+func (c *Conn) recv() (header *pdu.Header, resStructured *bytes.Buffer, resStream *Stream, err error) {
+	c.recvBusy.Lock()
+	unlockInStream := false
+	defer func() {
+		if !unlockInStream {
+			c.recvBusy.Unlock()
+		}
+	}()
+	// do not unlock, this is done in Read() or Close() of Stream
+
+	var hdrLen uint32
+	if err := binary.Read(c.c, binary.BigEndian, &hdrLen); err != nil {
+		// TODO close conn and invalidate client?
+		return nil, nil, nil, err
+	}
+
+	if hdrLen > c.config.RxHeaderMaxLen {
+		// TODO close conn
+		return nil, nil, nil, errors.New("reply header exceeds allowed length")
+	}
+
+	buf := bytes.NewBuffer(make([]byte, 0, hdrLen))
+	_, err = io.CopyN(buf, c.c, int64(hdrLen))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	var unmarshHeader pdu.Header
+	if err := proto.Unmarshal(buf.Bytes(), &unmarshHeader); err != nil {
+		return nil, nil, nil, errors.New("could not unmarshal header")
+	}
+
+	if unmarshHeader.PayloadLen > c.config.RxStructuredMaxLen {
+		return &unmarshHeader, nil, nil, errors.New("reply structured part exceeds allowed length")
+	}
+
+	resStructured = bytes.NewBuffer(make([]byte, 0, unmarshHeader.PayloadLen))
+	_, err = io.CopyN(resStructured, c.c, int64(unmarshHeader.PayloadLen))
+	if err != nil {
+		return &unmarshHeader, nil, nil, err
+	}
+
+	if unmarshHeader.Stream {
+		unlockInStream = true
+		resStream = &Stream {
+			conn: c,
+			r: newStreamReader(c.c, c.config.RxStreamMaxChunkSize),
+		}
+	} else {
+		resStream = nil
+	}
+
+
+	return &unmarshHeader, resStructured, resStream, nil
+}
+
+// fills in PayloadLen and Stream of pdu.Header
+func (c *Conn) send(h *pdu.Header, reqStructured *bytes.Buffer, reqStream io.Reader) error {
+
+	c.sendBusy.Lock()
+	defer c.sendBusy.Unlock()
+
+	if reqStructured == nil {
+		reqStructured = bytes.NewBuffer([]byte{})
+	}
+	if reqStructured.Len() > math.MaxUint32 {
+		return errors.New("structured part of request exceeds maximum length")
+	}
+
+	h.PayloadLen = uint32(reqStructured.Len())
+	h.Stream = reqStream != nil
+
+	hdr, err := proto.Marshal(h)
+	if err != nil {
+		return err
+	}
+	if len(hdr) > math.MaxUint32 {
+		return errors.New("marshaled header longer than allowed by protocol")
+	}
+
+	// send it all out
+
+	if err = binary.Write(c.c, binary.BigEndian, uint32(len(hdr))); err != nil {
+		return err
+	}
+	if _, err = io.Copy(c.c, bytes.NewReader(hdr)); err != nil {
+		return err
+	}
+	if _, err = io.Copy(c.c, reqStructured); err != nil {
+		return err
+	}
+	if (reqStream != nil) {
+		if err := writeStream(c.c, reqStream, c.config.TxChunkSize); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+
+
+
+

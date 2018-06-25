@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package pdu;
+
+message Header {
+    uint32 PayloadLen = 1;
+    bool Stream = 2;
+    string Endpoint = 3;
+    string EndpointError = 4;
+}
