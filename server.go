@@ -17,20 +17,28 @@ import (
 // resStream.Close() regardless of whether resStream.Read returned an error other than io.EOF.
 type HandlerFunc func(endpoint string, reqStructured *bytes.Buffer, reqStream io.Reader) (resStructured *bytes.Buffer, resStream io.Reader, err error)
 
-// ServeConn responds to requests it receives over rwc by calling handler.
-// See HandlerFunc for a description of the expected behavior of handler.
+// ServeConn consumes the rwc, i.e., it responds to requests it receives over rwc by calling handler until an
+// error on rwc.Read or rwc.Write, or a protocol error occurs.
+// If the error is io.EOF, nil is returned. Otherwise, the returned error will be != nil.
 //
-// ServeConn returns with an error if rwc returns an error on Read or Write operations.
-// It does not return errors returned by handler - these are sent to the client.
+// Note that errors returned by the handler do not cause this function to return.
+// See HandlerFunc for a description of the expected behavior of handler.
 func ServeConn(rwc io.ReadWriteCloser, config *ConnConfig, handler HandlerFunc) error {
 
-	conn := newConn(rwc, config)
+	conn, err := newConn(rwc, config)
+	if err != nil {
+		return err
+	}
 	defer conn.Close() // FIXME log error
 
 	for {
 
 		r := conn.recv()
 		if r.err != nil {
+			if r.err == io.EOF {
+				// it's OK for the client to just hang up here, no need for Close=1 in header
+				return nil
+			}
 			return r.err
 		}
 

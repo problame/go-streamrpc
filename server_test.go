@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"runtime"
 	"io/ioutil"
+	"context"
 )
 
 func testClientServerMockConnsServeResult(clientConn, serverConn io.ReadWriteCloser, serveResult chan error, handler HandlerFunc) (client *Client) {
@@ -21,7 +22,10 @@ func testClientServerMockConnsServeResult(clientConn, serverConn io.ReadWriteClo
 		TxChunkSize:          4,
 	}
 
-	client = NewClientOnConn(clientConn, &connConfig)
+	client, err := NewClientOnConn(clientConn, &connConfig)
+	if err != nil {
+		panic(err)
+	}
 	if serveResult == nil {
 		serveResult = make(chan error, 1) // just forget it
 	}
@@ -46,7 +50,7 @@ func TestBehaviorHandlerError(t *testing.T) {
 		return nil, nil, errors.New("test error")
 	})
 
-	stru, stre, err := client.RequestReply("foobar", bytes.NewBufferString("foo"), nil)
+	stru, stre, err := client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("foo"), nil)
 	assert.Nil(t, stru)
 	assert.Nil(t, stre)
 	reperr, ok := err.(*RemoteEndpointError)
@@ -72,7 +76,7 @@ func TestBehaviorRequestStreamReply(t *testing.T) {
 		return bytes.NewBufferString("structured"), bytes.NewBufferString("stream"), nil
 	})
 
-	stru, stre, err := client.RequestReply("foobar", bytes.NewBufferString("question"), nil)
+	stru, stre, err := client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("question"), nil)
 	assert.NoError(t, err)
 
 	assert.Equal(t, "structured", stru.String())
@@ -88,7 +92,7 @@ func TestBehaviorStreamRequestReply(t *testing.T) {
 		return bytes.NewBufferString("structured"), nil, nil
 	})
 
-	stru, stre, err := client.RequestReply("foobar", bytes.NewBufferString("question"), bytes.NewBufferString("stream"))
+	stru, stre, err := client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("question"), bytes.NewBufferString("stream"))
 	assert.NoError(t, err)
 	assert.Equal(t, "structured", stru.String())
 	assert.Nil(t, stre)
@@ -103,12 +107,12 @@ func TestBehaviorMultipleRequestsOnSameConnection(t *testing.T) {
 		return bytes.NewBufferString("structured"), bytes.NewBufferString("stream"), nil
 	})
 
-	stru, stre, err := client.RequestReply("foobar", bytes.NewBufferString("question"), nil)
+	stru, stre, err := client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("question"), nil)
 	assert.NoError(t, err)
 	assert.Equal(t, "structured", stru.String())
 	assert.Equal(t, "stream", readerToString(stre))
 
-	stru, stre, err = client.RequestReply("foobar", bytes.NewBufferString("question"), nil)
+	stru, stre, err = client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("question"), nil)
 	assert.NoError(t, err)
 	assert.Equal(t, "structured", stru.String())
 	assert.Equal(t, "stream", readerToString(stre))
@@ -120,14 +124,14 @@ func TestBehaviorOpenStreamBlocksNextRequest(t *testing.T) {
 		return bytes.NewBufferString("structured"), bytes.NewBufferString("stream"), nil
 	})
 
-	stru, stre, err := client.RequestReply("foobar", bytes.NewBufferString("question"), nil)
+	stru, stre, err := client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("question"), nil)
 	assert.NoError(t, err)
 	assert.Equal(t, "structured", stru.String())
 
 	var secondRequestDone int32
 	go func(){
 		atomic.StoreInt32(&secondRequestDone, 1)
-		stru, stre, err := client.RequestReply("foobar", bytes.NewBufferString("q2"), nil)
+		stru, stre, err := client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("q2"), nil)
 		atomic.StoreInt32(&secondRequestDone, 2)
 		assert.NoError(t, err)
 		assert.Equal(t, "structured", stru.String())
@@ -169,7 +173,7 @@ func TestBehaviorClientClosingUnconsumedStreamClosesConnection(t *testing.T) {
 		return bytes.NewBufferString("structured"), bytes.NewBufferString("stream"), nil
 	})
 
-	stru, stre, err := client.RequestReply("foobar", bytes.NewBufferString("q"), nil)
+	stru, stre, err := client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("q"), nil)
 	assert.NoError(t, err)
 	assert.Equal(t, "structured", stru.String())
 
@@ -193,7 +197,7 @@ func TestBehaviorClientClosesConnectionIfHandlerDoesNotCloseReqStream(t *testing
 	// -> the server will send the client a pdu.Header.Close = true
 	// ->-> the client will close the connecting
 
-	stru, stre, err := client.RequestReply("foo", bytes.NewBufferString("q"), bytes.NewBufferString("this is a stream that is never read"))
+	stru, stre, err := client.RequestReply(context.Background(), "foo", bytes.NewBufferString("q"), bytes.NewBufferString("this is a stream that is never read"))
 	assert.Nil(t, stru)
 	assert.Nil(t, stre)
 	assert.EqualError(t, err, "testerror")
@@ -225,10 +229,42 @@ func TestBehaviorServerClosesResStreamIfCloser(t *testing.T) {
 		return bytes.NewBufferString("structured"), mockStream, nil
 	})
 
-	stru, stre, err := client.RequestReply("foobar", bytes.NewBufferString("question"), nil)
+	stru, stre, err := client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("question"), nil)
 	time.Sleep(100*time.Millisecond)
 	assert.NoError(t, err)
 	assert.Equal(t, "structured", stru.String())
 	assert.Equal(t, "stream", readerToString(stre))
 	assert.Equal(t, 1, mockStream.closeCount)
+}
+
+func TestBehaviorClientContextCancel(t *testing.T) {
+
+	clientConnP, serverConn := net.Pipe()
+	clientConn := &readWriteCloseRecorder{clientConnP, 0}
+	serverErr := make(chan error, 1)
+
+	serverReceivedReq, serverRespond := make(chan struct{}), make(chan struct{})
+	client := testClientServerMockConnsServeResult(clientConn, serverConn, serverErr, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.Reader) (resStructured *bytes.Buffer, resStream io.Reader, err error) {
+		serverReceivedReq <- struct{}{}
+		<-serverRespond
+		return bytes.NewBufferString("foo"), nil, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		stru, stre, err := client.RequestReply(ctx, "foo", bytes.NewBufferString("req"), nil)
+		assert.Nil(t, stru)
+		assert.Nil(t, stre)
+		assert.Equal(t, err, context.Canceled)
+		serverRespond <- struct{}{}
+	}()
+
+	<- serverReceivedReq
+	cancel()
+
+	time.Sleep(100*time.Millisecond)
+
+	assert.Equal(t, 1, clientConn.closeCount)
+	assert.Error(t, <-serverErr)
+
 }

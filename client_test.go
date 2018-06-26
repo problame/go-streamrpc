@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"io"
 	"net"
+	"context"
 )
 
 func TestClientServer_Basic(t *testing.T) {
@@ -22,12 +23,13 @@ func TestClientServer_Basic(t *testing.T) {
 	go ServeConn(serverConn, &connConfig, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.Reader) (*bytes.Buffer, io.Reader, error) {
 		return bytes.NewBufferString("this is the structured response"), bytes.NewBufferString("this is the streamed response"), nil
 	})
-	client :=  NewClientOnConn(clientConn, &connConfig)
+	client, err :=  NewClientOnConn(clientConn, &connConfig)
+	assert.NoError(t, err)
 
 	in := bytes.NewBufferString("this is a test")
 	stream := bytes.NewBufferString("this is a stream")
 
-	out, outstream, err := client.RequestReply("foobar", in, stream)
+	out, outstream, err := client.RequestReply(context.Background(), "foobar", in, stream)
 	assert.Nil(t, err)
 
 	assert.Equal(t, "this is the structured response", out.String())

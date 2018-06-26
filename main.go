@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"sync"
+	"sync/atomic"
 )
 
 type ConnConfig struct {
@@ -37,31 +38,45 @@ func (c *ConnConfig) Validate() error {
 
 // Conn gates access to the underlying io.ReadWriteCloser to ensure that we always speak correct wire protocol.
 // FIXME this is totally internal, right?
+//
+// recv and send may be called concurrently, e.g. to receive an early error during a long send operation.
+// However, this only works because we assume that the wrapped io.ReadWriteCloser Conn.c will return errors on
+// Write or Read after it was Closed. This is the behavior of net.Conn.
 type Conn struct {
 	c        io.ReadWriteCloser
+	cvalid   atomic.Value
 	config   *ConnConfig
 	recvBusy sync.Mutex
 	sendBusy sync.Mutex
 }
 
-func newConn(c io.ReadWriteCloser, config *ConnConfig) *Conn {
+func newConn(c io.ReadWriteCloser, config *ConnConfig) (*Conn, error) {
 	if err := config.Validate(); err != nil {
-		panic(err)
+		return nil, err
 	}
-	return &Conn{
+	conn := &Conn{
 		c: c,
 		config: config,
 	}
+	conn.cvalid.Store(true)
+	return conn, nil
 }
 
 func (c *Conn) Valid() bool {
-	if c == nil { return false }
-	return c.c != nil
+	if c == nil {
+		return false
+	}
+	if c.c == nil {
+		return false
+	}
+	return c.cvalid.Load().(bool)
 }
 
+// Close calls the underlying io.ReadWriteCloser's Close once and invalidates that Conn
+// (c.Valid will return false afterwards)
 func (c *Conn) Close() error {
+	c.cvalid.Store(false)
 	err := c.c.Close()
-	c.c = nil
 	return err
 }
 

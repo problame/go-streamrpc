@@ -6,6 +6,7 @@ import (
 	"net"
 	"github.com/pkg/errors"
 	"github.com/problame/go-streamrpc/internal/pdu"
+	"context"
 )
 
 type Client struct {
@@ -18,24 +19,25 @@ type Connecter interface {
 	Connect() (net.Conn, error)
 }
 
-func NewClient(connecter Connecter, config *ConnConfig) *Client {
+func NewClient(connecter Connecter, config *ConnConfig) (*Client, error) {
 	if err := config.Validate(); err != nil {
-		panic(err)
+		return nil, err
 	}
 	return &Client{
 		cn: connecter,
 		cf: config,
-	}
+	}, nil
 }
 
-func NewClientOnConn(rwc io.ReadWriteCloser, config *ConnConfig) *Client {
-	if err := config.Validate(); err != nil {
-		panic(err)
+func NewClientOnConn(rwc io.ReadWriteCloser, config *ConnConfig) (*Client, error) {
+	c, err := newConn(rwc, config)
+	if err != nil {
+		return nil, err
 	}
 	return &Client{
 		cf: config,
-		c: newConn(rwc, config),
-	}
+		c: c,
+	}, nil
 }
 
 func (c *Client) reconn() error {
@@ -48,16 +50,18 @@ func (c *Client) reconn() error {
 		if err != nil {
 			return err
 		}
-		c.c = newConn(netConn, c.cf)
+		c.c, err = newConn(netConn, c.cf)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func (c *Client) closeConn() {
+func (c *Client) closeConn(ctx context.Context) {
 	if err := c.c.Close(); err != nil {
-		panic(err) // FIXME revise this when we have logging
+		logger(ctx).Printf("error closing connection: %s", err)
 	}
-	c.c = nil // not necessary, but provides clarity when debugging
 }
 
 type RemoteEndpointError struct {
@@ -80,7 +84,7 @@ func (e *RemoteEndpointError) Error() string {
 // if e == io.EOF, RequestReply does not consider it an error and assumes all data in the stream has been sent.
 // If e != io.EOF, the endpoint handler will receive the bytes already copied followed by a *StreamError.
 // However, for neither case does RequestReply return an error (FIXME) to the caller.
-func (c *Client) RequestReply(endpoint string, reqStructured *bytes.Buffer, reqStream io.Reader) (*bytes.Buffer, *Stream, error) {
+func (c *Client) RequestReply(ctx context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.Reader) (*bytes.Buffer, *Stream, error) {
 
 	if err := c.reconn(); err != nil {
 		return nil, nil, err
@@ -105,7 +109,7 @@ func (c *Client) RequestReply(endpoint string, reqStructured *bytes.Buffer, reqS
 			err = r.err
 			close = true
 		} else if r.header.Close && !(r.header.EndpointError != "") {
-			err = errors.New("protocol error: Close=true implies EndpointError!=")
+			err = errors.New("protocol error: Close=true implies EndpointError!=\"\"")
 			close = true
 		} else if r.header.EndpointError != "" {
 			err = &RemoteEndpointError{msg: r.header.EndpointError}
@@ -115,15 +119,22 @@ func (c *Client) RequestReply(endpoint string, reqStructured *bytes.Buffer, reqS
 	}()
 
 	var res result
-	for res = range rchan {
-		if res.close {
-			c.closeConn()
-		}
-		if res.err != nil {
-			return nil, nil, res.err
-		}
-		if res.r != nil {
-			break
+	out:
+	for {
+		select {
+			case <-ctx.Done():
+				c.closeConn(ctx)
+				return nil, nil, ctx.Err()
+			case res = <- rchan:
+				if res.close {
+					c.closeConn(ctx)
+				}
+				if res.err != nil {
+					return nil, nil, res.err
+				}
+				if res.r != nil {
+					break out
+				}
 		}
 	}
 	return res.r.structured, res.r.stream, nil
@@ -131,5 +142,5 @@ func (c *Client) RequestReply(endpoint string, reqStructured *bytes.Buffer, reqS
 
 func (c *Client) Close() {
 	c.c.send(&pdu.Header{Close: true}, nil, nil)
-	c.closeConn()
+	c.closeConn(context.Background())
 }
