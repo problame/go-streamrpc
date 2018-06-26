@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"math"
 	"strings"
 	"errors"
 )
@@ -24,62 +23,88 @@ func (e *SourceStreamError) Error() string {
 	return e.StreamError.Error()
 }
 
+type chunkBuffer struct {
+	csiz               uint32
+	headerLastChunkLen uint32
+	chunkLastReadLen   int
+	all                []byte
+	header             []byte
+	chunk              []byte
+}
+
+func newChunkBuffer(csiz uint32) chunkBuffer {
+	cbuf := chunkBuffer{
+		csiz: csiz,
+		all: make([]byte, 5 + csiz),
+	}
+	cbuf.header = cbuf.all[0:5]
+	cbuf.chunk = cbuf.all[5:]
+	return cbuf
+}
+
+func (b *chunkBuffer) prependHeader(len uint32, status uint8) {
+	// write LEN
+	binary.BigEndian.PutUint32(b.header[0:4], len)
+	// write status
+	b.header[4] = status
+	b.headerLastChunkLen = len
+}
+
+func (b *chunkBuffer) readChunk(r io.Reader) (int64, error) {
+	if b.chunkLastReadLen != 0 {
+		panic("can only read once before needing to flush")
+	}
+	n, err := r.Read(b.chunk)
+	b.chunkLastReadLen = n
+	return int64(n), err
+}
+
+func (b *chunkBuffer) flush(w io.Writer) (error) {
+	if int(b.headerLastChunkLen) != b.chunkLastReadLen {
+		panic("chunk length specified in header is inconsistent with last readChunk")
+	}
+	_, err := w.Write(b.all[0:5+b.chunkLastReadLen])
+	b.chunkLastReadLen = 0
+	return err
+}
+
 // does not return an error if r returns an error
 func writeStream(out io.Writer, r io.Reader, csiz uint32) error {
 
-	bufStorage := make([]byte, 0, csiz)
-	cbuf := bytes.NewBuffer(bufStorage)
-
-	var chunkHeaderBuf [5]byte
-	writeChunkHeader := func(len uint32, status uint8) error {
-		// write LEN
-		binary.BigEndian.PutUint32(chunkHeaderBuf[0:4], len)
-		// write status
-		chunkHeaderBuf[4] = status
-		_, err := out.Write(chunkHeaderBuf[:]) // Check correct?
-		return err
-	}
+	cbuf := newChunkBuffer(csiz)
 
 	for {
-		n, err := io.CopyN(cbuf, r, int64(csiz))
-
-		if n < 0 || n > int64(csiz) || n > math.MaxUint32 {
-			panic("implementation error")
-		}
+		n, err := cbuf.readChunk(r)
 
 		if err != nil && err != io.EOF {
 			errmsg := err.Error()
 			streamErr := err
 
-			var errChunkSizeBuf bytes.Buffer
-			io.Copy(&errChunkSizeBuf, io.LimitReader(strings.NewReader(errmsg), int64(csiz))) // cannot fail
-			if err := writeChunkHeader(uint32(errChunkSizeBuf.Len()), STATUS_ERROR); err != nil {
+			errChunk := newChunkBuffer(csiz)
+			n, err := errChunk.readChunk(strings.NewReader(errmsg));
+			if err != nil {
 				return err
 			}
-			if _, err = io.Copy(out, &errChunkSizeBuf); err != nil {
+			errChunk.prependHeader(uint32(n), STATUS_ERROR)
+			if err := errChunk.flush(out); err != nil {
 				return err
 			}
 			return &SourceStreamError{streamErr}
 		} else if err == io.EOF {
-			if err := writeChunkHeader(uint32(n), STATUS_OK); err != nil {
+			cbuf.prependHeader(uint32(n), STATUS_OK)
+			if err := cbuf.flush(out); err != nil {
 				return err
 			}
-			if _, err := io.Copy(out, cbuf); err != nil {
-				return err
-			}
-			if err := writeChunkHeader(0, STATUS_EOF); err != nil {
+			cbuf.prependHeader(0, STATUS_EOF)
+			if err := cbuf.flush(out); err != nil {
 				return err
 			}
 			return nil
 		}
 
 		// err == nil
-		if err := writeChunkHeader(uint32(n), STATUS_OK); err != nil {
-			return err
-		}
-		// flush out cbuf to disk
-		n, err = io.Copy(out, cbuf)
-		if err != nil { // assume the error is never due to cbuf
+		cbuf.prependHeader(uint32(n), STATUS_OK)
+		if err := cbuf.flush(out); err != nil { // assume the error is never due to cbuf's chunkData buffer
 			return err
 		}
 
