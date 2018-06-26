@@ -224,16 +224,22 @@ func (m *mockReadCloser) Close() error {
 
 func TestBehaviorServerClosesResStreamIfCloser(t *testing.T) {
 
+	clientConn, serverConn := net.Pipe()
+	serverRes := make(chan error, 1)
+
 	mockStream := &mockReadCloser{bytes.NewBufferString("stream"), 0, 0}
-	client := testClientServer(func(endpoint string, reqStructured *bytes.Buffer, reqStream io.Reader) (resStructured *bytes.Buffer, resStream io.Reader, err error) {
+	client := testClientServerMockConnsServeResult(clientConn, serverConn, serverRes, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.Reader) (resStructured *bytes.Buffer, resStream io.Reader, err error) {
 		return bytes.NewBufferString("structured"), mockStream, nil
 	})
 
 	stru, stre, err := client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("question"), nil)
-	time.Sleep(100*time.Millisecond)
 	assert.NoError(t, err)
 	assert.Equal(t, "structured", stru.String())
 	assert.Equal(t, "stream", readerToString(stre))
+
+	// make server exit
+	serverConn.Close()
+	assert.Equal(t, io.ErrClosedPipe, <-serverRes)
 	assert.Equal(t, 1, mockStream.closeCount)
 }
 

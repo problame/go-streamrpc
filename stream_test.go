@@ -6,6 +6,11 @@ import (
 	"io"
 	"github.com/pkg/errors"
 	"math"
+	"io/ioutil"
+	"os"
+	"net"
+	"strconv"
+	"fmt"
 )
 
 func TestStreamEncoding(t *testing.T) {
@@ -208,4 +213,99 @@ func TestStreamEncodingWriteIOError(t *testing.T) {
 		}
 	}
 
+}
+
+func doEncodingBenchmark(maxChunkSize uint32, copyByteCount int64, b *testing.B) {
+	ready := make(chan struct{})
+	go func() {
+		l, err := net.Listen("tcp", "127.0.0.1:12345")
+		if err != nil {
+			panic(err)
+		}
+		close(ready)
+		c, err := l.Accept()
+		if err != nil {
+			panic(err)
+		}
+		io.Copy(ioutil.Discard, c)
+		c.Close()
+	}()
+
+	<-ready
+
+	dest, err := net.Dial("tcp", "127.0.0.1:12345")
+	if err != nil {
+		panic(err)
+	}
+	src, _ := os.Open("/dev/zero")
+	if b != nil {
+		b.ResetTimer()
+	}
+	writeStream(dest, io.LimitReader(src, copyByteCount), maxChunkSize)
+	dest.Close()
+}
+
+func TestStreamEncodingBenchmark(t *testing.T) {
+
+	t.Skip("for manual usage, e.g. for generating flame graphs")
+	// Compile a test binary using go test -c -x, and use flame graphs or some other tool to look at performance
+	// This setup was used to root out unnecessary allocations.
+	// For performance evaluation, see BenchmarkStreamEncoding
+
+	maxChunkSize, _ := strconv.ParseUint(os.Getenv("MAX_CHUNK_SIZE"), 10, 32)
+	copyByteCount, _ := strconv.ParseInt(os.Getenv("COPY_BYTES"), 10, 64)
+	doEncodingBenchmark(uint32(maxChunkSize), copyByteCount, nil)
+}
+
+func BenchmarkStreamEncoding(b *testing.B) {
+	// Usage: go test -test.bench=BenchmarkStreamEncoding -test.run=^$
+	//
+	// Useful to find good defaults for csiz.
+	// The ns/op correspond to ns/byte, because b.N is used to specify the number of bytes to transfer lower is better.
+	//
+	// Note that this only tests one benchmark setup.
+	//
+	// Example output 1:
+	//	goos: freebsd
+	//	goarch: amd64
+	//	pkg: github.com/problame/go-streamrpc
+	//	BenchmarkStreamEncoding/csiz=2^10-8         	300000000	         4.05 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^11-8         	1000000000	         2.18 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^12-8         	2000000000	         1.14 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^13-8         	2000000000	         0.64 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^14-8         	2000000000	         0.39 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^15-8         	2000000000	         0.41 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^16-8         	2000000000	         0.42 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^17-8         	2000000000	         0.42 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^18-8         	2000000000	         0.42 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^19-8         	2000000000	         0.42 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^20-8         	2000000000	         0.43 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^21-8         	2000000000	         0.43 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^22-8         	2000000000	         0.45 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^23-8         	2000000000	         0.46 ns/op
+	//
+	// Example output 2:
+	//	goos: linux
+	//	goarch: amd64
+	//	pkg: github.com/problame/go-streamrpc
+	//	BenchmarkStreamEncoding/csiz=2^10-4         	200000000	         7.44 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^11-4         	500000000	         3.44 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^12-4         	1000000000	         2.02 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^13-4         	2000000000	         1.08 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^14-4         	2000000000	         0.60 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^15-4         	2000000000	         0.36 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^16-4         	2000000000	         0.30 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^17-4         	2000000000	         0.27 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^18-4         	2000000000	         0.23 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^19-4         	2000000000	         0.31 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^20-4         	2000000000	         0.23 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^21-4         	2000000000	         0.26 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^22-4         	2000000000	         0.29 ns/op
+	//	BenchmarkStreamEncoding/csiz=2^23-4         	2000000000	         0.29 ns/op
+	//
+	for csiz := uint32(10); csiz <= 23; csiz++ {
+		b.Run(fmt.Sprintf("csiz=2^%v", csiz), func(b *testing.B) {
+			doEncodingBenchmark(1 << csiz, int64(b.N), b)
+		})
+	}
 }

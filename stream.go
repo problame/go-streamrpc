@@ -30,16 +30,14 @@ func writeStream(out io.Writer, r io.Reader, csiz uint32) error {
 	bufStorage := make([]byte, 0, csiz)
 	cbuf := bytes.NewBuffer(bufStorage)
 
+	var chunkHeaderBuf [5]byte
 	writeChunkHeader := func(len uint32, status uint8) error {
 		// write LEN
-		if err := binary.Write(out, binary.BigEndian, len); err != nil {
-			return err
-		}
+		binary.BigEndian.PutUint32(chunkHeaderBuf[0:4], len)
 		// write status
-		if err := binary.Write(out, binary.BigEndian, status); err != nil {
-			return err
-		}
-		return nil
+		chunkHeaderBuf[4] = status
+		_, err := out.Write(chunkHeaderBuf[:]) // Check correct?
+		return err
 	}
 
 	for {
