@@ -145,6 +145,7 @@ func (r *streamReader) Read(p []byte) (n int, err error) {
 		return 0, r.e
 	}
 
+restart:
 	n = 0
 
 	if r.chunkRemaining > 0 {
@@ -175,7 +176,7 @@ func (r *streamReader) Read(p []byte) (n int, err error) {
 
 	if status == STATUS_OK {
 		r.chunkRemaining = len
-		return r.Read(p)
+		goto restart
 	}
 
 	if status == STATUS_EOF {
