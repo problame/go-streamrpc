@@ -143,6 +143,8 @@ func TestStreamDecodingIOError(t *testing.T) {
 		if err != e {
 			t.Errorf("streamReader should passs through io errors, but got %#v", err)
 		}
+		e2 := errors.New("this error should not appear")
+		fstream.FailWith = e2
 		var buf [10]byte
 		n, err := dec.Read(buf[:])
 		if n != 0 {
