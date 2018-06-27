@@ -149,8 +149,10 @@ restart:
 	n = 0
 
 	if r.chunkRemaining > 0 {
-		n, err = io.LimitReader(r.s, int64(r.chunkRemaining)).Read(p)
+		lr := io.LimitedReader{R: r.s, N: int64(r.chunkRemaining)}
+		n, err := lr.Read(p)
 		if err != nil && err != io.EOF {
+			r.e = err
 			return n, err
 		}
 		r.chunkRemaining -= uint32(n)
@@ -158,24 +160,32 @@ restart:
 	}
 
 	// read chunk header
-	var len uint32
-	var status uint8
-	if err := binary.Read(r.s, binary.BigEndian, &len); err != nil {
-		r.e = err
-		return 0, err
+	var (
+		chunkLen uint32
+		status uint8
+	)
+	var hdrBuf []byte
+	if len(p) >= 5 {
+		hdrBuf = p[0:5]
+	} else {
+		var reserveBuf [5]byte
+		hdrBuf = reserveBuf[0:5]
 	}
-	if err := binary.Read(r.s, binary.BigEndian, &status); err != nil {
+	lr := io.LimitedReader{r.s, 5}
+	if _, err := lr.Read(hdrBuf); err != nil {
 		r.e = err
-		return 0, err
+		return 0, r.e
 	}
+	chunkLen = binary.BigEndian.Uint32(hdrBuf[0:4])
+	status = uint8(hdrBuf[4])
 
-	if len > r.mcsiz {
+	if chunkLen > r.mcsiz {
 		r.e = ChunkSizeExceededError
 		return 0, r.e
 	}
 
 	if status == STATUS_OK {
-		r.chunkRemaining = len
+		r.chunkRemaining = chunkLen
 		goto restart
 	}
 
@@ -185,8 +195,8 @@ restart:
 	}
 
 	if status == STATUS_ERROR {
-		buf := bytes.NewBuffer(make([]byte, 0, len))
-		_, err := io.CopyN(buf, r.s, int64(len))
+		buf := bytes.NewBuffer(make([]byte, 0, chunkLen))
+		_, err := io.CopyN(buf, r.s, int64(chunkLen))
 		if err != nil {
 			r.e = err
 			return 0, r.e
