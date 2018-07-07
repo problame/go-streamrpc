@@ -88,6 +88,8 @@ type Stream struct {
 	conn *Conn
 }
 
+// Read implements io.Reader for Stream.
+// It may return a *StreamError as error.
 func (s *Stream) Read(p []byte) (n int, err error) {
 	n, err = s.r.Read(p)
 	if err != nil {

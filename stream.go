@@ -131,6 +131,7 @@ var ChunkSizeExceededError = errors.New("stream chunk exceeds maximum chunk size
 
 var ChunkHeaderUnknownStatusError = errors.New("received unknown status in stream chunk header")
 
+// StreamError encodes an error received in the STATUS_ERROR trailer chunk.
 type StreamError struct {
 	msg string
 }
