@@ -93,6 +93,7 @@ type Stream struct {
 func (s *Stream) Read(p []byte) (n int, err error) {
 	n, err = s.r.Read(p)
 	if err != nil {
+		s.Close()
 		s.conn.recvBusy.Unlock()
 		s.r = nil
 		s.conn = nil

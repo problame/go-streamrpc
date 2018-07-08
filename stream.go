@@ -140,6 +140,9 @@ func (e *StreamError) Error() string {
 	return e.msg
 }
 
+// Read reads from the stream encoded on the underlying io.Reader.
+// If the stream was aborted by the remote side with an error trailer (STATUS_ERROR)
+// Read returns that trailer error as a *StreamError
 func (r *streamReader) Read(p []byte) (n int, err error) {
 
 	if r.e != nil {
