@@ -50,6 +50,7 @@ type Conn struct {
 	sendBusy sync.Mutex
 }
 
+// newConn only returns errors returned by config.Validate()
 func newConn(c io.ReadWriteCloser, config *ConnConfig) (*Conn, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
