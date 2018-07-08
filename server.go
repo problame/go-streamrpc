@@ -15,7 +15,7 @@ import (
 // *StreamError instance when Read()ing from the *Stream.
 // To clean up resources held by resStream, ServeConn checks if resStream.(io.Closer), and if so, calls
 // resStream.Close() regardless of whether resStream.Read returned an error other than io.EOF.
-type HandlerFunc func(endpoint string, reqStructured *bytes.Buffer, reqStream io.Reader) (resStructured *bytes.Buffer, resStream io.Reader, err error)
+type HandlerFunc func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error)
 
 // ServeConn consumes the rwc, i.e., it responds to requests it receives over rwc by calling handler until an
 // error on rwc.Read or rwc.Write, or a protocol error occurs.

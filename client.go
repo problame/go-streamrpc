@@ -145,7 +145,7 @@ func (e *RemoteEndpointError) Error() string {
 // if e == io.EOF, RequestReply does not consider it an error and assumes all data in the stream has been sent.
 // If e != io.EOF, the endpoint handler will receive the bytes already copied followed by a *StreamError.
 // However, for neither case does RequestReply return an error (FIXME) to the caller.
-func (c *Client) RequestReply(ctx context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.Reader) (*bytes.Buffer, *Stream, error) {
+func (c *Client) RequestReply(ctx context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (*bytes.Buffer, *Stream, error) {
 
 	if err := c.reconn(ctx); err != nil {
 		return nil, nil, err

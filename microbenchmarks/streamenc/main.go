@@ -16,7 +16,13 @@ import (
 	"time"
 )
 
-func handleDevZeroStream(endpoint string, reqStructured *bytes.Buffer, reqStream io.Reader) (resStructured *bytes.Buffer, resStream io.Reader, err error) {
+type limitReadCloser struct {
+	io.Reader
+}
+
+func (limitReadCloser) Close() error { return nil }
+
+func handleDevZeroStream(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
 	streamLen, err := strconv.ParseInt(reqStructured.String(), 0, 64)
 	if err != nil {
 		return nil, nil, err
@@ -25,7 +31,7 @@ func handleDevZeroStream(endpoint string, reqStructured *bytes.Buffer, reqStream
 	if err != nil {
 		return nil, nil, err
 	}
-	return bytes.NewBufferString("OK"), io.LimitReader(z, streamLen), nil
+	return bytes.NewBufferString("OK"), limitReadCloser{io.LimitReader(z, streamLen)}, nil
 }
 
 func main() {

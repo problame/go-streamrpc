@@ -29,14 +29,14 @@ func TestClientServer_Basic(t *testing.T) {
 
 	clientConn, serverConn := net.Pipe()
 
-	go ServeConn(serverConn, clientConf.ConnConfig, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.Reader) (*bytes.Buffer, io.Reader, error) {
-		return bytes.NewBufferString("this is the structured response"), bytes.NewBufferString("this is the streamed response"), nil
+	go ServeConn(serverConn, clientConf.ConnConfig, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (*bytes.Buffer, io.ReadCloser, error) {
+		return bytes.NewBufferString("this is the structured response"), sReadCloser("this is the streamed response"), nil
 	})
 	client, err :=  NewClientOnConn(clientConn, clientConf)
 	require.NoError(t, err)
 
 	in := bytes.NewBufferString("this is a test")
-	stream := bytes.NewBufferString("this is a stream")
+	stream := sReadCloser("this is a stream")
 
 	out, outstream, err := client.RequestReply(context.Background(), "foobar", in, stream)
 	require.Nil(t, err)
