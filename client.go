@@ -7,19 +7,55 @@ import (
 	"github.com/pkg/errors"
 	"github.com/problame/go-streamrpc/internal/pdu"
 	"context"
+    "time"
+    "fmt"
 )
+
+type ClientConfig struct {
+    // The maximum number of times a single RequestReply tries connecting
+    // to the server.
+    MaxConnectAttempts int
+    // The initial sleep time for exponential backoff on connection failures
+    ReconnectBackoffBase time.Duration
+    // The growth factor for exponential backoff on connection failure
+    ReconnectBackoffFactor float64
+
+    // Config for established connects
+    ConnConfig *ConnConfig
+}
+
+func (cf *ClientConfig) Validate() error {
+	if cf == nil {
+		return errors.New("ClientConfig must not be nil")
+	}
+	if cf.MaxConnectAttempts <= 0 {
+		return errors.New("MaxConnectAttempts must be positive")
+	}
+	if cf.ReconnectBackoffBase <= 0 {
+		return errors.New("ReconnectBackoffBase must be positive")
+	}
+	if cf.ReconnectBackoffFactor <= 0 {
+		return errors.New("ReconnectBackoffFactor must be positive")
+	}
+	if err := cf.ConnConfig.Validate(); err != nil {
+		return fmt.Errorf("ClientConfig invalid: %s", err)
+	}
+	return nil
+}
 
 type Client struct {
 	cn Connecter
-	cf *ConnConfig
+	cf *ClientConfig
 	c *Conn
+	lastReconnFailure time.Time
+	reconnFailures int
 }
 
 type Connecter interface {
 	Connect() (net.Conn, error)
 }
 
-func NewClient(connecter Connecter, config *ConnConfig) (*Client, error) {
+func NewClient(connecter Connecter, config *ClientConfig) (*Client, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -29,8 +65,11 @@ func NewClient(connecter Connecter, config *ConnConfig) (*Client, error) {
 	}, nil
 }
 
-func NewClientOnConn(rwc io.ReadWriteCloser, config *ConnConfig) (*Client, error) {
-	c, err := newConn(rwc, config)
+func NewClientOnConn(rwc io.ReadWriteCloser, config *ClientConfig) (*Client, error) {
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	c, err := newConn(rwc, config.ConnConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -40,20 +79,42 @@ func NewClientOnConn(rwc io.ReadWriteCloser, config *ConnConfig) (*Client, error
 	}, nil
 }
 
-func (c *Client) reconn() error {
-	if !c.c.Valid() {
-		if c.cn == nil {
-			// for NewClientOnConn
-			return errors.New("cannot reconnect without connector")
+var ErrorMaxReconnects = errors.New("maximum number of reconnection attempts exceeded")
+
+func (c *Client) reconn(ctx context.Context) error {
+    connectAttempts := 0
+    sleepTime := c.cf.ReconnectBackoffBase
+    for !c.c.Valid() && connectAttempts < c.cf.MaxConnectAttempts {
+
+        if c.cn == nil {
+            // for NewClientOnConn
+            return errors.New("cannot reconnect without connector")
 		}
+
+		log := logger(ctx)
+		log.Printf("connecting to server")
+
 		netConn, err := c.cn.Connect()
+		connectAttempts++
+		if err != nil {
+			log.Printf("error connecting to server: %s", err)
+			log.Printf("sleeping %s before retry", sleepTime)
+			select {
+			case <-time.After(sleepTime):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			sleepTime = time.Duration(sleepTime.Seconds() * c.cf.ReconnectBackoffFactor * 1e9)
+			continue
+		}
+
+		c.c, err = newConn(netConn, c.cf.ConnConfig)
 		if err != nil {
 			return err
 		}
-		c.c, err = newConn(netConn, c.cf)
-		if err != nil {
-			return err
-		}
+	}
+	if connectAttempts >= c.cf.MaxConnectAttempts {
+		return ErrorMaxReconnects
 	}
 	return nil
 }
@@ -86,7 +147,7 @@ func (e *RemoteEndpointError) Error() string {
 // However, for neither case does RequestReply return an error (FIXME) to the caller.
 func (c *Client) RequestReply(ctx context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.Reader) (*bytes.Buffer, *Stream, error) {
 
-	if err := c.reconn(); err != nil {
+	if err := c.reconn(ctx); err != nil {
 		return nil, nil, err
 	}
 

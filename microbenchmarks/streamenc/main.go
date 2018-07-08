@@ -31,11 +31,17 @@ func handleDevZeroStream(endpoint string, reqStructured *bytes.Buffer, reqStream
 func main() {
 
 	var mode string
-	connConfig := streamrpc.ConnConfig{
+	connConfig := &streamrpc.ConnConfig{
 		RxStreamMaxChunkSize: 0,
 		RxHeaderMaxLen: 1024,
 		RxStructuredMaxLen: 1 << 16,
 		TxChunkSize: 0,
+	}
+	clientConfig := &streamrpc.ClientConfig{
+		MaxConnectAttempts:     3,
+		ReconnectBackoffBase:   1*time.Second,
+		ReconnectBackoffFactor: 2,
+		ConnConfig:             connConfig,
 	}
 
 	flag.StringVar(&mode, "mode", "client|server", "")
@@ -63,7 +69,7 @@ func main() {
 			log.Printf("begin request")
 			begin := time.Now()
 
-			client, err := streamrpc.NewClientOnConn(conn, &connConfig)
+			client, err := streamrpc.NewClientOnConn(conn, clientConfig)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -106,7 +112,7 @@ func main() {
 			func() {
 				defer conn.Close()
 				log.Printf("begin ServeConn: %s", conn)
-				if err := streamrpc.ServeConn(conn, &connConfig, handleDevZeroStream); err != nil {
+				if err := streamrpc.ServeConn(conn, connConfig, handleDevZeroStream); err != nil {
 					log.Printf("error ServeConn: %s", err)
 				} else {
 					log.Printf("finished ServeConn")

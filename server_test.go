@@ -15,14 +15,20 @@ import (
 )
 
 func testClientServerMockConnsServeResult(clientConn, serverConn io.ReadWriteCloser, serveResult chan error, handler HandlerFunc) (client *Client) {
-	connConfig := ConnConfig{
+	connConfig := &ConnConfig{
 		RxStreamMaxChunkSize: 4 * 1024 * 1024,
 		RxHeaderMaxLen:       1024,
 		RxStructuredMaxLen:   64 * 1024,
 		TxChunkSize:          4,
 	}
+	clientConfig := &ClientConfig{
+		MaxConnectAttempts: 1,
+		ReconnectBackoffFactor: 1,
+		ReconnectBackoffBase: 10*time.Millisecond,
+		ConnConfig: connConfig,
+	}
 
-	client, err := NewClientOnConn(clientConn, &connConfig)
+	client, err := NewClientOnConn(clientConn, clientConfig)
 	if err != nil {
 		panic(err)
 	}
@@ -30,7 +36,7 @@ func testClientServerMockConnsServeResult(clientConn, serverConn io.ReadWriteClo
 		serveResult = make(chan error, 1) // just forget it
 	}
 	go func() {
-		serveResult <- ServeConn(serverConn, &connConfig, handler)
+		serveResult <- ServeConn(serverConn, connConfig, handler)
 	}()
 	return client
 }
