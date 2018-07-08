@@ -9,6 +9,7 @@ import (
 	"context"
     "time"
     "fmt"
+    "sync"
 )
 
 type ClientConfig struct {
@@ -44,25 +45,35 @@ func (cf *ClientConfig) Validate() error {
 }
 
 type Client struct {
-	cn Connecter
-	cf *ClientConfig
-	c *Conn
-	lastReconnFailure time.Time
-	reconnFailures int
+	cf	*ClientConfig
+	cm	connMan
+}
+
+type connMan struct {
+	cf  	*ClientConfig
+	mtx 	sync.Mutex
+	stopped	bool
+	c		*Conn
+	cn		Connecter
 }
 
 type Connecter interface {
-	Connect() (net.Conn, error)
+	Connect(ctx context.Context) (net.Conn, error)
 }
 
 func NewClient(connecter Connecter, config *ClientConfig) (*Client, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	return &Client{
-		cn: connecter,
+	client := &Client{
 		cf: config,
-	}, nil
+		cm: connMan{
+			cf: config,
+			cn: connecter,
+		},
+	}
+	return client, nil
+
 }
 
 func NewClientOnConn(rwc io.ReadWriteCloser, config *ClientConfig) (*Client, error) {
@@ -75,26 +86,32 @@ func NewClientOnConn(rwc io.ReadWriteCloser, config *ClientConfig) (*Client, err
 	}
 	return &Client{
 		cf: config,
-		c: c,
+		cm: connMan{
+			cf: config,
+			c: c,
+		},
 	}, nil
 }
 
 var ErrorMaxReconnects = errors.New("maximum number of reconnection attempts exceeded")
 
-func (c *Client) reconn(ctx context.Context) error {
-    connectAttempts := 0
-    sleepTime := c.cf.ReconnectBackoffBase
-    for (c.c == nil || c.c.Closed()) && connectAttempts < c.cf.MaxConnectAttempts {
+// may return nil, nil
+func (m *connMan) getConn(ctx context.Context, reconnect bool) (*Conn, error) {
+    m.mtx.Lock()
+    defer m.mtx.Unlock()
 
-        if c.cn == nil {
+    connectAttempts := 0
+    sleepTime := m.cf.ReconnectBackoffBase
+    for !m.stopped && reconnect && (m.c == nil || m.c.Closed()) && connectAttempts < m.cf.MaxConnectAttempts {
+        if m.cn == nil {
             // for NewClientOnConn
-            return errors.New("cannot reconnect without connector")
-		}
+            return nil, errors.New("cannot reconnect without connector")
+        }
 
 		log := logger(ctx)
 		log.Printf("connecting to server")
 
-		netConn, err := c.cn.Connect()
+		netConn, err := m.cn.Connect(ctx)
 		connectAttempts++
 		if err != nil {
 			log.Printf("error connecting to server: %s", err)
@@ -102,27 +119,31 @@ func (c *Client) reconn(ctx context.Context) error {
 			select {
 			case <-time.After(sleepTime):
 			case <-ctx.Done():
-				return ctx.Err()
+				return nil, ctx.Err()
 			}
-			sleepTime = time.Duration(sleepTime.Seconds() * c.cf.ReconnectBackoffFactor * 1e9)
+			sleepTime = time.Duration(sleepTime.Seconds() * m.cf.ReconnectBackoffFactor * 1e9)
 			continue
 		}
 
-		c.c, err = newConn(netConn, c.cf.ConnConfig)
+		m.c, err = newConn(netConn, m.cf.ConnConfig)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	if connectAttempts >= c.cf.MaxConnectAttempts {
-		return ErrorMaxReconnects
+	if connectAttempts >= m.cf.MaxConnectAttempts {
+		return nil, ErrorMaxReconnects
 	}
-	return nil
+	if m.stopped {
+		if m.c != nil {
+			m.c.Close()
+		}
+		return nil, errors.New("RPC client closed")
+	}
+	return m.c, nil
 }
 
-func (c *Client) closeConn(ctx context.Context) {
-	if err := c.c.Close(); err != nil {
-		logger(ctx).Printf("error closing connection: %s", err)
-	}
+func (m *connMan) stop() {
+	m.stopped = true
 }
 
 type RemoteEndpointError struct {
@@ -152,7 +173,8 @@ var (
 // However, for neither case does RequestReply return an error (FIXME) to the caller.
 func (c *Client) RequestReply(ctx context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (*bytes.Buffer, *Stream, error) {
 
-	if err := c.reconn(ctx); err != nil {
+	conn, err := c.cm.getConn(ctx, true)
+	if err != nil {
 		return nil, nil, err
 	}
 
@@ -164,11 +186,11 @@ func (c *Client) RequestReply(ctx context.Context, endpoint string, reqStructure
 	rchan := make(chan result, 2) // size 2 to avoid leaking goroutines while also not draining the channel (will be GCd)
 	go func() {
 		hdr := pdu.Header{Endpoint: endpoint}
-		err := c.c.send(&hdr, reqStructured, reqStream)
-		rchan <- result{nil, err, err != nil} // FIXME: always close is correct right now because c.c.send calls writeStream which hides error returned by reqStream. However, maybe we should in fact not hide that?
+		err := conn.send(&hdr, reqStructured, reqStream)
+		rchan <- result{nil, err, err != nil && err != errorConcurrentSend} // FIXME: always close is correct right now because c.c.send calls writeStream which hides error returned by reqStream. However, maybe we should in fact not hide that?
 	}()
 	go func() {
-		r := c.c.recv()
+		r := conn.recv()
 		close := false
 		var err error = nil
 		if r.err != nil {
@@ -192,11 +214,11 @@ func (c *Client) RequestReply(ctx context.Context, endpoint string, reqStructure
 	for {
 		select {
 			case <-ctx.Done():
-				c.closeConn(ctx)
+				conn.Close()
 				return nil, nil, ctx.Err()
 			case res = <- rchan:
 				if res.close {
-					c.closeConn(ctx)
+					conn.Close()
 				}
 				if res.err != nil {
 					if res.err == errorConcurrentRecv || res.err == errorConcurrentSend {
@@ -216,6 +238,11 @@ func (c *Client) RequestReply(ctx context.Context, endpoint string, reqStructure
 }
 
 func (c *Client) Close() {
-	c.c.send(&pdu.Header{Close: true}, nil, nil)
-	c.closeConn(context.Background())
+	c.cm.stop()
+	if conn, _ := c.cm.getConn(context.Background(), false); conn != nil {
+		// ignore potential concurrent use errors
+		// FIXME: specify send timeout / do we even need this?
+		conn.send(&pdu.Header{Close: true}, nil, nil)
+		conn.Close()
+	}
 }

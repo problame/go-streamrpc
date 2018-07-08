@@ -55,7 +55,7 @@ type mockConnecter struct {
 	mockErr error
 }
 
-func (m *mockConnecter) Connect() (net.Conn, error) {
+func (m *mockConnecter) Connect(ctx context.Context) (net.Conn, error) {
 	return m.mockConn, m.mockErr
 }
 
