@@ -84,7 +84,7 @@ var ErrorMaxReconnects = errors.New("maximum number of reconnection attempts exc
 func (c *Client) reconn(ctx context.Context) error {
     connectAttempts := 0
     sleepTime := c.cf.ReconnectBackoffBase
-    for !c.c.Valid() && connectAttempts < c.cf.MaxConnectAttempts {
+    for (c.c == nil || c.c.Closed()) && connectAttempts < c.cf.MaxConnectAttempts {
 
         if c.cn == nil {
             // for NewClientOnConn
@@ -133,6 +133,11 @@ func (e *RemoteEndpointError) Error() string {
 	return e.msg
 }
 
+var (
+	ErrorConcurrentRequestReply = errors.New("concurrent use of RPC connection")
+	ErrorRequestReplyWithOpenStream = errors.New("cannot use RPC connection until result stream from a previous call is closed")
+)
+
 // RequestReply sends a request to a remote HandlerFunc and reads its response.
 //
 // If the endpoint handler returned an error, that error is returned as a *RemoteEndpointError.
@@ -169,6 +174,9 @@ func (c *Client) RequestReply(ctx context.Context, endpoint string, reqStructure
 		if r.err != nil {
 			err = r.err
 			close = true
+			if r.err == errorRecvWithOpenStream || r.err == errorConcurrentRecv {
+				close = false
+			}
 		} else if r.header.Close && !(r.header.EndpointError != "") {
 			err = errors.New("protocol error: Close=true implies EndpointError!=\"\"")
 			close = true
@@ -191,6 +199,12 @@ func (c *Client) RequestReply(ctx context.Context, endpoint string, reqStructure
 					c.closeConn(ctx)
 				}
 				if res.err != nil {
+					if res.err == errorConcurrentRecv || res.err == errorConcurrentSend {
+						return nil, nil, ErrorConcurrentRequestReply
+					}
+					if res.err == errorRecvWithOpenStream {
+						return nil, nil, ErrorRequestReplyWithOpenStream
+					}
 					return nil, nil, res.err
 				}
 				if res.r != nil {

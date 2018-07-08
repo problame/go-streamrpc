@@ -8,9 +8,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"time"
-	"sync/atomic"
-	"runtime"
-	"io/ioutil"
 	"context"
 )
 
@@ -104,7 +101,7 @@ func TestBehaviorStreamRequestReply(t *testing.T) {
 	assert.Nil(t, stre)
 }
 
-func TestBehaviorMultipleRequestsOnSameConnection(t *testing.T) {
+func TestBehaviorMultipleRequestsOnSameConnectionWork(t *testing.T) {
 
 	client := testClientServer(func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
 		assert.Equal(t, "foobar", endpoint)
@@ -117,6 +114,7 @@ func TestBehaviorMultipleRequestsOnSameConnection(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "structured", stru.String())
 	assert.Equal(t, "stream", readerToString(stre))
+	stre.Close()
 
 	stru, stre, err = client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("question"), nil)
 	assert.NoError(t, err)
@@ -124,7 +122,7 @@ func TestBehaviorMultipleRequestsOnSameConnection(t *testing.T) {
 	assert.Equal(t, "stream", readerToString(stre))
 }
 
-func TestBehaviorOpenStreamBlocksNextRequest(t *testing.T) {
+func TestBehaviorOpenStreamReturnsErrorOnOpenStream(t *testing.T) {
 
 	client := testClientServer(func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
 		return bytes.NewBufferString("structured"), sReadCloser("stream"), nil
@@ -133,31 +131,44 @@ func TestBehaviorOpenStreamBlocksNextRequest(t *testing.T) {
 	stru, stre, err := client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("question"), nil)
 	assert.NoError(t, err)
 	assert.Equal(t, "structured", stru.String())
+	// do not consume stre
+	_ = stre
 
-	var secondRequestDone int32
-	go func(){
-		atomic.StoreInt32(&secondRequestDone, 1)
-		stru, stre, err := client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("q2"), nil)
-		atomic.StoreInt32(&secondRequestDone, 2)
+	stru2, stre2, err2 := client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("q2"), nil)
+	assert.Nil(t, stru2)
+	assert.Nil(t, stre2)
+	assert.Error(t, err2)
+	assert.Equal(t, ErrorRequestReplyWithOpenStream, err2)
+}
+
+
+func TestBehaviorConcurrentRequestReplyError(t *testing.T) {
+
+	firstArrived , checkDone , firstDone := false, false, false
+	client := testClientServer(func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
+		firstArrived = true
+		for !checkDone {}
+		// do not leave an open stream, that would cause other errors
+		return bytes.NewBufferString("structured"), nil, nil
+	})
+
+	go func() {
+		stru, stre, err := client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("question"), nil)
 		assert.NoError(t, err)
 		assert.Equal(t, "structured", stru.String())
-		assert.Equal(t, "stream", readerToString(stre))
+		assert.Nil(t, stre)
+		firstDone = true
 	}()
 
-	for atomic.LoadInt32(&secondRequestDone) != 1 {
-		runtime.Gosched()
-	}
-	time.Sleep(100*time.Millisecond)
-	assert.False(t, atomic.LoadInt32(&secondRequestDone) == 2,
-		"new request should not be allowed to start before previous stream has been fully read")
+	for !firstArrived {}
 
-	_, err = io.Copy(ioutil.Discard, stre)
-	assert.NoError(t, err)
-
-	time.Sleep(100*time.Millisecond)
-	assert.True(t, atomic.LoadInt32(&secondRequestDone) == 2)
-
-
+	stru2, stre2, err2 := client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("q2"), nil)
+	assert.Nil(t, stru2)
+	assert.Nil(t, stre2)
+	assert.Error(t, err2)
+	assert.Equal(t, ErrorConcurrentRequestReply, err2)
+	checkDone = true
+	for !firstDone {}
 }
 
 type readWriteCloseRecorder struct {

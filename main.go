@@ -9,8 +9,8 @@ import (
 	"github.com/golang/protobuf/proto"
 	"encoding/binary"
 	"errors"
-	"sync"
 	"sync/atomic"
+	"fmt"
 )
 
 type ConnConfig struct {
@@ -44,10 +44,10 @@ func (c *ConnConfig) Validate() error {
 // Write or Read after it was Closed. This is the behavior of net.Conn.
 type Conn struct {
 	c        io.ReadWriteCloser
-	cvalid   atomic.Value
+	closed   int32 // 0 = open, 1 = closed
 	config   *ConnConfig
-	recvBusy sync.Mutex
-	sendBusy sync.Mutex
+	recvBusy cas // 0 usable, 1 = recv running, 2 = stream closed
+	sendBusy spinlock
 }
 
 // newConn only returns errors returned by config.Validate()
@@ -58,33 +58,31 @@ func newConn(c io.ReadWriteCloser, config *ConnConfig) (*Conn, error) {
 	conn := &Conn{
 		c: c,
 		config: config,
+		closed: 0,
 	}
-	conn.cvalid.Store(true)
 	return conn, nil
 }
 
-func (c *Conn) Valid() bool {
-	if c == nil {
-		return false
-	}
-	if c.c == nil {
-		return false
-	}
-	return c.cvalid.Load().(bool)
+func (c *Conn) Closed() bool {
+	return atomic.LoadInt32(&c.closed) == 1
 }
 
-// Close calls the underlying io.ReadWriteCloser's Close once and invalidates that Conn
-// (c.Valid will return false afterwards)
+// Close calls the underlying io.ReadWriteCloser's Close exactly once and invalidates Conn
+// (c.Closed will return true afterwards)
 func (c *Conn) Close() error {
-	c.cvalid.Store(false)
+	if !atomic.CompareAndSwapInt32(&c.closed, 0, 1) {
+		// someone else closed it already
+		return nil
+	}
 	err := c.c.Close()
 	return err
 }
 
 // Stream is a io.ReadCloser that provides access to the streamed part of a PDU packet.
 // A Stream must always be fully consumed, i.e., read until an error is returned or be closed.
-// Before a Stream is consumed, no new requests can be sent over the connection, and callers will block.
+// While a Stream is not closed, the Stream's Conn's methods recv() and send() return errors.
 type Stream struct {
+	closed int32 // 0 = open; 1 = closed
 	r *streamReader
 	conn *Conn
 }
@@ -92,18 +90,11 @@ type Stream struct {
 // Read implements io.Reader for Stream.
 // It may return a *StreamError as error.
 func (s *Stream) Read(p []byte) (n int, err error) {
-	n, err = s.r.Read(p)
-	if err != nil {
-		s.Close()
-		s.conn.recvBusy.Unlock()
-		s.r = nil
-		s.conn = nil
-	}
-	return n, err
+	return s.r.Read(p)
 }
 
 func (s *Stream) Close() error {
-	if s == nil {
+	if !atomic.CompareAndSwapInt32(&s.closed, 0, 1) {
 		return nil
 	}
 	if !s.r.Consumed() {
@@ -111,6 +102,10 @@ func (s *Stream) Close() error {
 		// hence the Conn is in unknown state and must be closed.
 		s.conn.Close()
 	}
+	if p := s.conn.recvBusy.CompareAndSwap(2, 0); p != 2 {
+		panic(fmt.Sprintf("inconsistent use of recvBusy: %v", p))
+	}
+	// only after the stream (and connection, if necessary) is closed can a new recv start
 	return nil
 }
 
@@ -121,15 +116,33 @@ type recvResult struct {
 	err        error
 }
 
+var (
+	errorConcurrentRecv = errors.New("concurrent recv on busy connection")
+	errorRecvWithOpenStream = errors.New("recv with open result stream")
+	errorConcurrentSend= errors.New("concurrent send on busy connection")
+)
+
 func (c *Conn) recv() (*recvResult) {
-	c.recvBusy.Lock()
+
+	if c.Closed() {
+		return &recvResult{nil, nil, nil, errors.New("recv on closed connection")}
+	}
+
+	switch c.recvBusy.CompareAndSwap(0, 1) {
+	case 1:
+		return &recvResult{nil, nil, nil, errorConcurrentRecv}
+	case 2:
+		return &recvResult{nil, nil, nil, errorRecvWithOpenStream}
+	default:
+	}
 	unlockInStream := false
 	defer func() {
 		if !unlockInStream {
-			c.recvBusy.Unlock()
+			if p := c.recvBusy.CompareAndSwap(1, 0); p != 1 {
+				panic(fmt.Sprintf("inconsistent use of recvBusy: %v", p))
+			}
 		}
 	}()
-	// do not unlock, this is done in Read() or Close() of Stream
 
 	var hdrLen uint32
 	if err := binary.Read(c.c, binary.BigEndian, &hdrLen); err != nil {
@@ -164,6 +177,9 @@ func (c *Conn) recv() (*recvResult) {
 	var resStream *Stream
 	if unmarshHeader.Stream {
 		unlockInStream = true
+		if p := c.recvBusy.CompareAndSwap(1, 2); p != 1 {
+			panic(fmt.Sprintf("inconsistent use of recvBusy: %v", p))
+		}
 		resStream = &Stream {
 			conn: c,
 			r: newStreamReader(c.c, c.config.RxStreamMaxChunkSize),
@@ -178,7 +194,13 @@ func (c *Conn) recv() (*recvResult) {
 // fills in PayloadLen and Stream of pdu.Header
 func (c *Conn) send(h *pdu.Header, reqStructured *bytes.Buffer, reqStream io.Reader) error {
 
-	c.sendBusy.Lock()
+	if c.Closed() {
+		return errors.New("send on closed connection")
+	}
+
+	if !c.sendBusy.TryLock() {
+		return errorConcurrentSend
+	}
 	defer c.sendBusy.Unlock()
 
 	if reqStructured == nil {
