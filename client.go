@@ -7,36 +7,18 @@ import (
 	"github.com/pkg/errors"
 	"github.com/problame/go-streamrpc/internal/pdu"
 	"context"
-    "time"
     "fmt"
     "sync"
 )
 
 type ClientConfig struct {
-    // The maximum number of times a single RequestReply tries connecting
-    // to the server.
-    MaxConnectAttempts int
-    // The initial sleep time for exponential backoff on connection failures
-    ReconnectBackoffBase time.Duration
-    // The growth factor for exponential backoff on connection failure
-    ReconnectBackoffFactor float64
-
-    // Config for established connects
+    // Config for established connections
     ConnConfig *ConnConfig
 }
 
 func (cf *ClientConfig) Validate() error {
 	if cf == nil {
 		return errors.New("ClientConfig must not be nil")
-	}
-	if cf.MaxConnectAttempts <= 0 {
-		return errors.New("MaxConnectAttempts must be positive")
-	}
-	if cf.ReconnectBackoffBase <= 0 {
-		return errors.New("ReconnectBackoffBase must be positive")
-	}
-	if cf.ReconnectBackoffFactor <= 0 {
-		return errors.New("ReconnectBackoffFactor must be positive")
 	}
 	if err := cf.ConnConfig.Validate(); err != nil {
 		return fmt.Errorf("ClientConfig invalid: %s", err)
@@ -93,16 +75,16 @@ func NewClientOnConn(rwc io.ReadWriteCloser, config *ClientConfig) (*Client, err
 	}, nil
 }
 
-var ErrorMaxReconnects = errors.New("maximum number of reconnection attempts exceeded")
+var (
+	ErrorRPCClientClosed = errors.New("use of closed RPC client")
+)
 
 // may return nil, nil
 func (m *connMan) getConn(ctx context.Context, reconnect bool) (*Conn, error) {
     m.mtx.Lock()
     defer m.mtx.Unlock()
 
-    connectAttempts := 0
-    sleepTime := m.cf.ReconnectBackoffBase
-    for !m.stopped && reconnect && (m.c == nil || m.c.Closed()) && connectAttempts < m.cf.MaxConnectAttempts {
+    if !m.stopped && reconnect && (m.c == nil || m.c.Closed()) {
         if m.cn == nil {
             // for NewClientOnConn
             return nil, errors.New("cannot reconnect without connector")
@@ -112,32 +94,21 @@ func (m *connMan) getConn(ctx context.Context, reconnect bool) (*Conn, error) {
 		log.Printf("connecting to server")
 
 		netConn, err := m.cn.Connect(ctx)
-		connectAttempts++
 		if err != nil {
-			log.Printf("error connecting to server: %s", err)
-			log.Printf("sleeping %s before retry", sleepTime)
-			select {
-			case <-time.After(sleepTime):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-			sleepTime = time.Duration(sleepTime.Seconds() * m.cf.ReconnectBackoffFactor * 1e9)
-			continue
+			return nil, err
 		}
 
 		m.c, err = newConn(netConn, m.cf.ConnConfig)
 		if err != nil {
 			return nil, err
 		}
-	}
-	if connectAttempts >= m.cf.MaxConnectAttempts {
-		return nil, ErrorMaxReconnects
+		return m.c, err
 	}
 	if m.stopped {
 		if m.c != nil {
 			m.c.Close()
 		}
-		return nil, errors.New("RPC client closed")
+		return nil, ErrorRPCClientClosed
 	}
 	return m.c, nil
 }

@@ -19,9 +19,6 @@ func testClientServerMockConnsServeResult(clientConn, serverConn io.ReadWriteClo
 		TxChunkSize:          4,
 	}
 	clientConfig := &ClientConfig{
-		MaxConnectAttempts: 1,
-		ReconnectBackoffFactor: 1,
-		ReconnectBackoffBase: 10*time.Millisecond,
 		ConnConfig: connConfig,
 	}
 

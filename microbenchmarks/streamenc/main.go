@@ -44,9 +44,6 @@ func main() {
 		TxChunkSize: 0,
 	}
 	clientConfig := &streamrpc.ClientConfig{
-		MaxConnectAttempts:     3,
-		ReconnectBackoffBase:   1*time.Second,
-		ReconnectBackoffFactor: 2,
 		ConnConfig:             connConfig,
 	}
 
