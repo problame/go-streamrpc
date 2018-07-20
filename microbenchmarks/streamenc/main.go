@@ -42,6 +42,12 @@ func main() {
 		RxHeaderMaxLen: 1024,
 		RxStructuredMaxLen: 1 << 16,
 		TxChunkSize: 0,
+		RxTimeout: streamrpc.Timeout{
+			Progress: 0,
+		},
+		TxTimeout: streamrpc.Timeout{
+			Progress: 0,
+		},
 	}
 	clientConfig := &streamrpc.ClientConfig{
 		ConnConfig:             connConfig,
@@ -50,6 +56,8 @@ func main() {
 	flag.StringVar(&mode, "mode", "client|server", "")
 	flag.Uint32Var(&connConfig.TxChunkSize, "c.txcsiz", 1 << 21 , "")
 	flag.Uint32Var(&connConfig.RxStreamMaxChunkSize, "c.rxmaxcsiz", 1 << 21, "")
+	flag.DurationVar(&connConfig.RxTimeout.Progress, "c.rxto.prog", 0, "")
+	flag.DurationVar(&connConfig.TxTimeout.Progress, "c.txto.prog", 0, "")
 	flag.Parse()
 
 	serverRE := regexp.MustCompile(`^server:(tcp):(.*:.*)$`)

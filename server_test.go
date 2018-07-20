@@ -11,7 +11,7 @@ import (
 	"context"
 )
 
-func testClientServerMockConnsServeResult(clientConn, serverConn io.ReadWriteCloser, serveResult chan error, handler HandlerFunc) (client *Client) {
+func testClientServerMockConnsServeResult(clientConn, serverConn net.Conn, serveResult chan error, handler HandlerFunc) (client *Client) {
 	connConfig := &ConnConfig{
 		RxStreamMaxChunkSize: 4 * 1024 * 1024,
 		RxHeaderMaxLen:       1024,
@@ -35,7 +35,7 @@ func testClientServerMockConnsServeResult(clientConn, serverConn io.ReadWriteClo
 	return client
 }
 
-func testClientServerMockConns(clientConn, serverConn io.ReadWriteCloser, handler HandlerFunc) (client *Client) {
+func testClientServerMockConns(clientConn, serverConn net.Conn, handler HandlerFunc) (client *Client) {
 	return testClientServerMockConnsServeResult(clientConn, serverConn, nil, handler)
 }
 
@@ -169,13 +169,13 @@ func TestBehaviorConcurrentRequestReplyError(t *testing.T) {
 }
 
 type readWriteCloseRecorder struct {
-	io.ReadWriteCloser
+	net.Conn
 	closeCount int
 }
 
 func (r *readWriteCloseRecorder) Close() error {
 	r.closeCount++
-	return r.ReadWriteCloser.Close()
+	return r.Conn.Close()
 }
 
 func TestBehaviorClientClosingUnconsumedStreamClosesConnection(t *testing.T) {

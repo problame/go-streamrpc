@@ -4,6 +4,7 @@ import (
 	"io"
 	"bytes"
 	"github.com/problame/go-streamrpc/internal/pdu"
+	"net"
 )
 
 // The handler MUST consume reqStream fully (e.g. until an io.EOF occurs) OR it MUST return an error.
@@ -23,9 +24,9 @@ type HandlerFunc func(endpoint string, reqStructured *bytes.Buffer, reqStream io
 //
 // Note that errors returned by the handler do not cause this function to return.
 // See HandlerFunc for a description of the expected behavior of handler.
-func ServeConn(rwc io.ReadWriteCloser, config *ConnConfig, handler HandlerFunc) error {
+func ServeConn(netConn net.Conn, config *ConnConfig, handler HandlerFunc) error {
 
-	conn, err := newConn(rwc, config)
+	conn, err := newConn(netConn , config)
 	if err != nil {
 		return err
 	}

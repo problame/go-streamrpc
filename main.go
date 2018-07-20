@@ -11,6 +11,8 @@ import (
 	"errors"
 	"sync/atomic"
 	"fmt"
+	"net"
+	"time"
 )
 
 type ConnConfig struct {
@@ -18,6 +20,20 @@ type ConnConfig struct {
 	RxStructuredMaxLen uint32
 	RxStreamMaxChunkSize uint32
 	TxChunkSize uint32
+
+	RxTimeout, TxTimeout Timeout
+}
+
+type Timeout struct {
+	// The time allotted to a Read or Write until it must have made > 0 bytes of progress
+	Progress time.Duration
+}
+
+func (t *Timeout) ProgressDeadline(now time.Time) time.Time {
+	if t.Progress == 0 {
+		return time.Time{}
+	}
+	return now.Add(t.Progress)
 }
 
 func (c *ConnConfig) Validate() error {
@@ -43,15 +59,16 @@ func (c *ConnConfig) Validate() error {
 // However, this only works because we assume that the wrapped io.ReadWriteCloser Conn.c will return errors on
 // Write or Read after it was Closed. This is the behavior of net.Conn.
 type Conn struct {
-	c        io.ReadWriteCloser
+	c        net.Conn
 	closed   int32 // 0 = open, 1 = closed
 	config   *ConnConfig
 	recvBusy cas // 0 usable, 1 = recv running, 2 = stream closed
 	sendBusy spinlock
+	lastReadDL, lastWriteDL time.Time
 }
 
 // newConn only returns errors returned by config.Validate()
-func newConn(c io.ReadWriteCloser, config *ConnConfig) (*Conn, error) {
+func newConn(c net.Conn, config *ConnConfig) (*Conn, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -76,6 +93,90 @@ func (c *Conn) Close() error {
 	}
 	err := c.c.Close()
 	return err
+}
+
+func (c *Conn) Read(b []byte) (n int, err error) {
+	if len(b) == 0 {
+		return 0, io.ErrShortBuffer
+	}
+	n = 0
+	firstRound := true
+	for ;; firstRound = false {
+		now := time.Now()
+		if now.After(c.lastReadDL) { // also branches for c.lastReadDL = 0, but it makes control flow less ugly
+			dl := c.config.RxTimeout.ProgressDeadline(now)
+			if !dl.IsZero() {
+				if err := c.c.SetReadDeadline(dl); err != nil {
+					return 0, err
+				}
+				c.lastReadDL = dl
+			}
+		}
+		ni, err := c.c.Read(b[n:])
+		n += ni
+		if !c.lastReadDL.IsZero() && err != nil && (firstRound || ni > 0) { // last parentheses = did we make progress?
+			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
+				continue
+			}
+		}
+		return n, err
+	}
+}
+
+func (c *Conn) WriteBuffers(buffers *net.Buffers) (n int64, err error) {
+	if len(*buffers) == 0 {
+		return 0, io.ErrShortBuffer
+	}
+	n = 0
+	firstRound := true
+	for ;; firstRound = false {
+		now := time.Now()
+		if now.After(c.lastWriteDL) { // also branches for c.lastReadDL = 0, but it makes control flow less ugly
+			dl := c.config.TxTimeout.ProgressDeadline(now)
+			if !dl.IsZero() {
+				if err := c.c.SetWriteDeadline(dl); err != nil {
+					return 0, err
+				}
+				c.lastWriteDL = dl
+			}
+		}
+		ni, err := io.Copy(c.c, buffers)
+		n += ni
+		if !c.lastWriteDL.IsZero() && err != nil && (firstRound || ni > 0) { // last parentheses = did we make progress?
+			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
+				continue
+			}
+		}
+		return n, err
+	}
+}
+
+func (c *Conn) Write(b []byte) (n int, err error) {
+	if len(b) == 0 {
+		return 0, io.ErrShortBuffer
+	}
+	n = 0
+	firstRound := true
+	for ;; firstRound = false {
+		now := time.Now()
+		if now.After(c.lastWriteDL) { // also branches for c.lastReadDL = 0, but it makes control flow less ugly
+			dl := c.config.TxTimeout.ProgressDeadline(now)
+			if !dl.IsZero() {
+				if err := c.c.SetWriteDeadline(dl); err != nil {
+					return 0, err
+				}
+				c.lastWriteDL = dl
+			}
+		}
+		ni, err := c.c.Write(b[n:])
+		n += ni
+		if !c.lastWriteDL.IsZero() && err != nil && (firstRound || ni > 0) { // last parentheses = did we make progress?
+			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
+				continue
+			}
+		}
+		return n, err
+	}
 }
 
 // Stream is a io.ReadCloser that provides access to the streamed part of a PDU packet.
@@ -145,7 +246,7 @@ func (c *Conn) recv() (*recvResult) {
 	}()
 
 	var hdrLen uint32
-	if err := binary.Read(c.c, binary.BigEndian, &hdrLen); err != nil {
+	if err := binary.Read(c, binary.BigEndian, &hdrLen); err != nil {
 		return &recvResult{nil, nil, nil, err}
 	}
 
@@ -154,7 +255,7 @@ func (c *Conn) recv() (*recvResult) {
 	}
 
 	buf := bytes.NewBuffer(make([]byte, 0, hdrLen))
-	_, err := io.CopyN(buf, c.c, int64(hdrLen))
+	_, err := io.CopyN(buf, c, int64(hdrLen))
 	if err != nil {
 		return &recvResult{nil, nil, nil, err}
 	}
@@ -169,7 +270,7 @@ func (c *Conn) recv() (*recvResult) {
 	}
 
 	resStructured := bytes.NewBuffer(make([]byte, 0, unmarshHeader.PayloadLen))
-	_, err = io.CopyN(resStructured, c.c, int64(unmarshHeader.PayloadLen))
+	_, err = io.CopyN(resStructured, c, int64(unmarshHeader.PayloadLen))
 	if err != nil {
 		return &recvResult{&unmarshHeader, nil, nil, err}
 	}
