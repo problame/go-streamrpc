@@ -58,11 +58,11 @@ func NewClient(connecter Connecter, config *ClientConfig) (*Client, error) {
 
 }
 
-func NewClientOnConn(rwc io.ReadWriteCloser, config *ClientConfig) (*Client, error) {
+func NewClientOnConn(conn net.Conn, config *ClientConfig) (*Client, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	c, err := newConn(rwc, config.ConnConfig)
+	c, err := newConn(conn, config.ConnConfig)
 	if err != nil {
 		return nil, err
 	}
