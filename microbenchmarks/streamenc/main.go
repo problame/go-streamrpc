@@ -4,15 +4,17 @@ import (
 	flag "github.com/spf13/pflag"
 	"log"
 
-	"regexp"
-	"net"
-	"github.com/problame/go-streamrpc"
 	"bytes"
-	"io"
-	"strconv"
-	"os"
 	"context"
 	"fmt"
+	"github.com/problame/go-streamrpc"
+	"io"
+	"net"
+	"net/http"
+	_ "net/http/pprof"
+	"os"
+	"regexp"
+	"strconv"
 	"time"
 )
 
@@ -39,9 +41,9 @@ func main() {
 	var mode string
 	connConfig := &streamrpc.ConnConfig{
 		RxStreamMaxChunkSize: 0,
-		RxHeaderMaxLen: 1024,
-		RxStructuredMaxLen: 1 << 16,
-		TxChunkSize: 0,
+		RxHeaderMaxLen:       1024,
+		RxStructuredMaxLen:   1 << 16,
+		TxChunkSize:          0,
 		RxTimeout: streamrpc.Timeout{
 			Progress: 0,
 		},
@@ -50,15 +52,17 @@ func main() {
 		},
 	}
 	clientConfig := &streamrpc.ClientConfig{
-		ConnConfig:             connConfig,
+		ConnConfig: connConfig,
 	}
 
 	flag.StringVar(&mode, "mode", "client|server", "")
-	flag.Uint32Var(&connConfig.TxChunkSize, "c.txcsiz", 1 << 21 , "")
-	flag.Uint32Var(&connConfig.RxStreamMaxChunkSize, "c.rxmaxcsiz", 1 << 21, "")
+	flag.Uint32Var(&connConfig.TxChunkSize, "c.txcsiz", 1<<21, "")
+	flag.Uint32Var(&connConfig.RxStreamMaxChunkSize, "c.rxmaxcsiz", 1<<21, "")
 	flag.DurationVar(&connConfig.RxTimeout.Progress, "c.rxto.prog", 0, "")
 	flag.DurationVar(&connConfig.TxTimeout.Progress, "c.txto.prog", 0, "")
 	flag.Parse()
+
+	go http.ListenAndServe(":8080", nil)
 
 	serverRE := regexp.MustCompile(`^server:(tcp):(.*:.*)$`)
 	clientRE := regexp.MustCompile(`^client:(tcp):(.*:.*):(.*)$`)
@@ -75,7 +79,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		func () {
+		func() {
 			defer conn.Close()
 			log.Printf("begin request")
 			begin := time.Now()
@@ -96,8 +100,8 @@ func main() {
 
 			n, err := io.Copy(os.Stdout, rstre)
 			delta := time.Now().Sub(begin)
-			byteps := float64(n) / delta.Seconds()
-			log.Printf("transferred %d bytes in %s, this amounts to %v MB/s or %v Mb/s", n, delta, byteps/1e6, (byteps/1e6)*8)
+			mbyteps := float64(n) / (1e6 * delta.Seconds())
+			log.Printf("transferred %d bytes in %s, this amounts to %v MB/s or %v Mb/s", n, delta, mbyteps, mbyteps*8)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -130,7 +134,6 @@ func main() {
 				}
 			}()
 		}
-
 
 	default:
 		log.Fatal("specify -mode client|server")
