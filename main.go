@@ -113,6 +113,15 @@ func (c *Conn) Write(b []byte) (n int, err error) {
 	return c.c.Write(b)
 }
 
+var _ BuffersWriter = &Conn{}
+
+func (c *Conn) WriteBuffers(buffers *net.Buffers) (n int64, err error) {
+	if err := c.c.SetWriteDeadline(c.config.TxTimeout.ProgressDeadline(time.Now())); err != nil {
+		return 0, err
+	}
+	return io.Copy(c.c, buffers)
+}
+
 // Stream is a io.ReadCloser that provides access to the streamed part of a PDU packet.
 // A Stream must always be fully consumed, i.e., read until an error is returned or be closed.
 // While a Stream is not closed, the Stream's Conn's methods recv() and send() return errors.
@@ -269,7 +278,7 @@ func (c *Conn) send(h *pdu.Header, reqStructured *bytes.Buffer, reqStream io.Rea
 		return err
 	}
 	if (reqStream != nil) {
-		if err := writeStream(c.c, reqStream, c.config.TxChunkSize); err != nil {
+		if err := writeStream(c, reqStream, c.config.TxChunkSize); err != nil {
 			return err
 		}
 	}
