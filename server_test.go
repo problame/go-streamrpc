@@ -293,7 +293,7 @@ func TestBehaviorServerClosesResStreamIfCloser(t *testing.T) {
 
 	// make server exit
 	serverConn.Close()
-	assert.Equal(t, io.ErrClosedPipe, <-serverRes)
+	assert.Error(t, <-serverRes)
 	assert.Equal(t, 1, mockStream.closeCount)
 }
 
