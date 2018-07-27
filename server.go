@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"github.com/problame/go-streamrpc/internal/pdu"
 	"net"
+	"context"
 )
 
 // The handler MUST consume reqStream fully (e.g. until an io.EOF occurs) OR it MUST return an error.
@@ -24,13 +25,18 @@ type HandlerFunc func(endpoint string, reqStructured *bytes.Buffer, reqStream io
 //
 // Note that errors returned by the handler do not cause this function to return.
 // See HandlerFunc for a description of the expected behavior of handler.
-func ServeConn(netConn net.Conn, config *ConnConfig, handler HandlerFunc) error {
+func ServeConn(ctx context.Context, netConn net.Conn, config *ConnConfig, handler HandlerFunc) error {
+	log := logger(ctx)
 
 	conn, err := newConn(netConn , config)
 	if err != nil {
 		return err
 	}
-	defer conn.Close() // FIXME log error
+	defer func() {
+		if err :=  conn.Close(); err != nil {
+			log.Printf("error closing connection: %s", err)
+		}
+	}()
 
 	for {
 
@@ -50,11 +56,11 @@ func ServeConn(netConn net.Conn, config *ConnConfig, handler HandlerFunc) error 
 				Close: r.stream != nil, // handler might not have consumed r.stream yet, so the connection is in unknown state
 			}
 			if err := conn.send(&hdr, nil, nil); err != nil {
-				// FIXME log error
+				log.Printf("error sending handler-error response: %s", err)
 				return err
 			}
 			if hdr.Close {
-				// FIXME: flush conn?
+				log.Printf("closing connection after handler error on request with a stream")
 				return nil // defer will Close it
 			}
 		}
@@ -62,7 +68,9 @@ func ServeConn(netConn net.Conn, config *ConnConfig, handler HandlerFunc) error 
 		hdr := pdu.Header{}
 		err = conn.send(&hdr, resStructured, resStream)
 		if closer, ok := resStream.(io.Closer); ok {
-			closer.Close() // FIXME log error
+			if err := closer.Close(); err != nil {
+				log.Printf("error closing stream returned from handler")
+			}
 		}
 		if err != nil {
 			return err
