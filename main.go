@@ -20,6 +20,7 @@ type ConnConfig struct {
 	RxHeaderMaxLen uint32
 	RxStructuredMaxLen uint32
 	RxStreamMaxChunkSize uint32
+	// FIXME enforce TxHeaderMaxLen, TxStructuredMaxLen on send path
 	TxChunkSize uint32
 
 	RxTimeout, TxTimeout Timeout
