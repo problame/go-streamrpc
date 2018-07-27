@@ -19,6 +19,37 @@ func (l testingLogger) Printf(fmt string, args... interface{}) {
 	l.Logf(fmt, args...)
 }
 
+// this is terrible, but we can't use net.Pipe because it does not linger after Close
+// which is what the tests expect
+func newTestPipe() (net.Conn, net.Conn) {
+	l, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		panic(err)
+	}
+	defer l.Close()
+
+	a, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		panic(err)
+	}
+	b, err := l.Accept()
+	if err != nil {
+		panic(err)
+	}
+	banner := [4]byte{0xba,0xdf,0xf0,0x0d}
+	bannerCopy := [4]byte{}
+	copy(bannerCopy[:], banner[:])
+	if n, err := a.Write(bannerCopy[:]); n != len(bannerCopy) || err != nil {
+		panic(fmt.Sprintf("%v %v", n, err))
+	}
+	if n, err := b.Read(bannerCopy[:]); n != len(bannerCopy) || err != nil {
+		panic(fmt.Sprintf("%v %v", n, err))
+	}
+	if !bytes.Equal(banner[:], bannerCopy[:]) {
+		panic("connection hijacked")
+	}
+	return a, b
+}
 func testClientServerMockConnsServeResult(t *testing.T, clientConn, serverConn net.Conn, serveResult chan error, handler HandlerFunc) (client *Client) {
 	connConfig := &ConnConfig{
 		RxStreamMaxChunkSize: 4 * 1024 * 1024,
@@ -48,8 +79,8 @@ func testClientServerMockConns(t *testing.T, clientConn, serverConn net.Conn, ha
 	return testClientServerMockConnsServeResult(t, clientConn, serverConn, nil, handler)
 }
 
-	clientConn, serverConn := net.Pipe()
 func testClientServer(t *testing.T, handler HandlerFunc) (client *Client) {
+	clientConn, serverConn := newTestPipe()
 	return testClientServerMockConns(t, clientConn, serverConn, handler)
 }
 
@@ -189,7 +220,7 @@ func (r *readWriteCloseRecorder) Close() error {
 
 func TestBehaviorClientClosingUnconsumedStreamClosesConnection(t *testing.T) {
 
-	clientConnP, serverConn := net.Pipe()
+	clientConnP, serverConn := newTestPipe()
 	clientConn := &readWriteCloseRecorder{clientConnP, 0}
 
 	client := testClientServerMockConns(t, clientConn, serverConn, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
@@ -208,7 +239,7 @@ func TestBehaviorClientClosingUnconsumedStreamClosesConnection(t *testing.T) {
 
 func TestBehaviorClientClosesConnectionIfHandlerDoesNotCloseReqStream(t *testing.T) {
 
-	clientConnP, serverConn := net.Pipe()
+	clientConnP, serverConn := newTestPipe()
 	clientConn := &readWriteCloseRecorder{clientConnP, 0}
 	serveRes := make(chan error, 1)
 
@@ -247,7 +278,7 @@ func (m *mockReadCloser) Close() error {
 
 func TestBehaviorServerClosesResStreamIfCloser(t *testing.T) {
 
-	clientConn, serverConn := net.Pipe()
+	clientConn, serverConn := newTestPipe()
 	serverRes := make(chan error, 1)
 
 	mockStream := &mockReadCloser{bytes.NewBufferString("stream"), 0, 0}
@@ -268,7 +299,7 @@ func TestBehaviorServerClosesResStreamIfCloser(t *testing.T) {
 
 func TestBehaviorClientContextCancelClosesConnection(t *testing.T) {
 
-	clientConnP, serverConn := net.Pipe()
+	clientConnP, serverConn := newTestPipe()
 	clientConn := &readWriteCloseRecorder{clientConnP, 0}
 	serverErr := make(chan error, 1)
 
