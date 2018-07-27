@@ -66,7 +66,6 @@ type Conn struct {
 	config   *ConnConfig
 	recvBusy cas // 0 usable, 1 = recv running, 2 = stream closed
 	sendBusy spinlock
-	dlmRead, dlmWrite deadlineManager
 }
 
 // newConn only returns errors returned by config.Validate()
@@ -78,8 +77,6 @@ func newConn(c net.Conn, config *ConnConfig) (*Conn, error) {
 		c: c,
 		config: config,
 		closed: 0,
-		dlmRead: deadlineManager{timeout: config.RxTimeout},
-		dlmWrite: deadlineManager{timeout: config.TxTimeout},
 	}
 	return conn, nil
 }

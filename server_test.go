@@ -7,8 +7,9 @@ import (
 	"io"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
-	"time"
 	"context"
+	"runtime"
+	"fmt"
 )
 
 type testingLogger struct {
