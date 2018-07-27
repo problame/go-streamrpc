@@ -249,7 +249,7 @@ func TestBehaviorClientClosesConnectionIfHandlerDoesNotCloseReqStream(t *testing
 
 	// send reqStream to server, but the handler doesn't consume it but returns an error instead
 	// -> the server will send the client a pdu.Header.Close = true
-	// ->-> the client will close the connecting
+	// ->-> the client will close the connection
 
 	stru, stre, err := client.RequestReply(context.Background(), "foo", bytes.NewBufferString("q"), sReadCloser("this is a stream that is never read"))
 	assert.Nil(t, stru)
