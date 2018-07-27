@@ -11,6 +11,14 @@ import (
 	"context"
 )
 
+type testingLogger struct {
+	*testing.T
+}
+
+func (l testingLogger) Printf(fmt string, args... interface{}) {
+	l.Logf(fmt, args...)
+}
+
 func testClientServerMockConnsServeResult(t *testing.T, clientConn, serverConn net.Conn, serveResult chan error, handler HandlerFunc) (client *Client) {
 	connConfig := &ConnConfig{
 		RxStreamMaxChunkSize: 4 * 1024 * 1024,
