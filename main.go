@@ -96,87 +96,17 @@ func (c *Conn) Close() error {
 }
 
 func (c *Conn) Read(b []byte) (n int, err error) {
-	if len(b) == 0 {
-		return 0, io.ErrShortBuffer
+	if err := c.c.SetReadDeadline(c.config.RxTimeout.ProgressDeadline(time.Now())); err != nil {
+		return 0, err
 	}
-	n = 0
-	firstRound := true
-	for ;; firstRound = false {
-		now := time.Now()
-		if now.After(c.lastReadDL) { // also branches for c.lastReadDL = 0, but it makes control flow less ugly
-			dl := c.config.RxTimeout.ProgressDeadline(now)
-			if !dl.IsZero() {
-				if err := c.c.SetReadDeadline(dl); err != nil {
-					return 0, err
-				}
-				c.lastReadDL = dl
-			}
-		}
-		ni, err := c.c.Read(b[n:])
-		n += ni
-		if !c.lastReadDL.IsZero() && err != nil && (firstRound || ni > 0) { // last parentheses = did we make progress?
-			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
-				continue
-			}
-		}
-		return n, err
-	}
-}
-
-func (c *Conn) WriteBuffers(buffers *net.Buffers) (n int64, err error) {
-	if len(*buffers) == 0 {
-		return 0, io.ErrShortBuffer
-	}
-	n = 0
-	firstRound := true
-	for ;; firstRound = false {
-		now := time.Now()
-		if now.After(c.lastWriteDL) { // also branches for c.lastReadDL = 0, but it makes control flow less ugly
-			dl := c.config.TxTimeout.ProgressDeadline(now)
-			if !dl.IsZero() {
-				if err := c.c.SetWriteDeadline(dl); err != nil {
-					return 0, err
-				}
-				c.lastWriteDL = dl
-			}
-		}
-		ni, err := io.Copy(c.c, buffers)
-		n += ni
-		if !c.lastWriteDL.IsZero() && err != nil && (firstRound || ni > 0) { // last parentheses = did we make progress?
-			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
-				continue
-			}
-		}
-		return n, err
-	}
+	return c.c.Read(b)
 }
 
 func (c *Conn) Write(b []byte) (n int, err error) {
-	if len(b) == 0 {
-		return 0, io.ErrShortBuffer
+	if err := c.c.SetWriteDeadline(c.config.TxTimeout.ProgressDeadline(time.Now())); err != nil {
+		return 0, err
 	}
-	n = 0
-	firstRound := true
-	for ;; firstRound = false {
-		now := time.Now()
-		if now.After(c.lastWriteDL) { // also branches for c.lastReadDL = 0, but it makes control flow less ugly
-			dl := c.config.TxTimeout.ProgressDeadline(now)
-			if !dl.IsZero() {
-				if err := c.c.SetWriteDeadline(dl); err != nil {
-					return 0, err
-				}
-				c.lastWriteDL = dl
-			}
-		}
-		ni, err := c.c.Write(b[n:])
-		n += ni
-		if !c.lastWriteDL.IsZero() && err != nil && (firstRound || ni > 0) { // last parentheses = did we make progress?
-			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
-				continue
-			}
-		}
-		return n, err
-	}
+	return c.c.Write(b)
 }
 
 // Stream is a io.ReadCloser that provides access to the streamed part of a PDU packet.
