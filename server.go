@@ -63,6 +63,7 @@ func ServeConn(ctx context.Context, netConn net.Conn, config *ConnConfig, handle
 				log.Printf("closing connection after handler error on request with a stream")
 				return nil // defer will Close it
 			}
+			continue
 		}
 
 		hdr := pdu.Header{}
