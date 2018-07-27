@@ -11,6 +11,8 @@ import (
 	"os"
 	"time"
 	"encoding/binary"
+	"net/http"
+	_ "net/http/pprof"
 )
 
 func main() {
@@ -21,6 +23,8 @@ func main() {
 	flag.StringVar(&mode, "mode", "client|server", "")
 	flag.IntVar(&bufsiz, "c.bufsiz", 1 << 21, "")
 	flag.Parse()
+
+	go http.ListenAndServe(":8080", nil)
 
 	buf := make([]byte, bufsiz)
 

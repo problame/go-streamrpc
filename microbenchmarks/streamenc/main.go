@@ -14,6 +14,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+	"net/http"
+	_ "net/http/pprof"
 )
 
 type limitReadCloser struct {
@@ -36,6 +38,7 @@ func handleDevZeroStream(endpoint string, reqStructured *bytes.Buffer, reqStream
 
 func main() {
 
+
 	var mode string
 	connConfig := &streamrpc.ConnConfig{
 		RxStreamMaxChunkSize: 0,
@@ -53,12 +56,15 @@ func main() {
 		ConnConfig:             connConfig,
 	}
 
+
 	flag.StringVar(&mode, "mode", "client|server", "")
 	flag.Uint32Var(&connConfig.TxChunkSize, "c.txcsiz", 1 << 21 , "")
 	flag.Uint32Var(&connConfig.RxStreamMaxChunkSize, "c.rxmaxcsiz", 1 << 21, "")
 	flag.DurationVar(&connConfig.RxTimeout.Progress, "c.rxto.prog", 0, "")
 	flag.DurationVar(&connConfig.TxTimeout.Progress, "c.txto.prog", 0, "")
 	flag.Parse()
+
+	go http.ListenAndServe(":8080", nil)
 
 	serverRE := regexp.MustCompile(`^server:(tcp):(.*:.*)$`)
 	clientRE := regexp.MustCompile(`^client:(tcp):(.*:.*):(.*)$`)
