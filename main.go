@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"time"
+	"bufio"
 )
 
 type ConnConfig struct {
@@ -223,7 +224,7 @@ func (c *Conn) recv() (*recvResult) {
 		}
 		resStream = &Stream {
 			conn: c,
-			r: newStreamReader(c.c, c.config.RxStreamMaxChunkSize),
+			r: newStreamReader(bufio.NewReaderSize(c, 10 * int((c.config.RxHeaderMaxLen + c.config.RxStructuredMaxLen + c.config.RxStreamMaxChunkSize))), c.config.RxStreamMaxChunkSize),
 		}
 	} else {
 		resStream = nil
