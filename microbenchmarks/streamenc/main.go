@@ -123,7 +123,7 @@ func main() {
 			func() {
 				defer conn.Close()
 				log.Printf("begin ServeConn: %s", conn)
-				if err := streamrpc.ServeConn(conn, connConfig, handleDevZeroStream); err != nil {
+				if err := streamrpc.ServeConn(context.Background(), conn, connConfig, handleDevZeroStream); err != nil {
 					log.Printf("error ServeConn: %s", err)
 				} else {
 					log.Printf("finished ServeConn")
