@@ -145,7 +145,7 @@ func TestBehaviorConcurrentRequestReplyError(t *testing.T) {
 	firstArrived , checkDone , firstDone := false, false, false
 	client := testClientServer(t, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
 		firstArrived = true
-		for !checkDone {}
+		for !checkDone { runtime.Gosched() }
 		// do not leave an open stream, that would cause other errors
 		return bytes.NewBufferString("structured"), nil, nil
 	})
@@ -158,7 +158,7 @@ func TestBehaviorConcurrentRequestReplyError(t *testing.T) {
 		firstDone = true
 	}()
 
-	for !firstArrived {}
+	for !firstArrived { runtime.Gosched() }
 
 	stru2, stre2, err2 := client.RequestReply(context.Background(), "foobar", bytes.NewBufferString("q2"), nil)
 	assert.Nil(t, stru2)
@@ -258,13 +258,13 @@ func TestBehaviorServerClosesResStreamIfCloser(t *testing.T) {
 	assert.Equal(t, 1, mockStream.closeCount)
 }
 
-func TestBehaviorClientContextCancel(t *testing.T) {
+func TestBehaviorClientContextCancelClosesConnection(t *testing.T) {
 
 	clientConnP, serverConn := net.Pipe()
 	clientConn := &readWriteCloseRecorder{clientConnP, 0}
 	serverErr := make(chan error, 1)
 
-	serverReceivedReq, serverRespond := make(chan struct{}), make(chan struct{})
+	serverReceivedReq, clientReturned, serverRespond := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	client := testClientServerMockConnsServeResult(t, clientConn, serverConn, serverErr, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
 		serverReceivedReq <- struct{}{}
 		<-serverRespond
@@ -277,15 +277,12 @@ func TestBehaviorClientContextCancel(t *testing.T) {
 		assert.Nil(t, stru)
 		assert.Nil(t, stre)
 		assert.Equal(t, err, context.Canceled)
-		serverRespond <- struct{}{}
+		clientReturned <- struct{}{}
 	}()
 
 	<- serverReceivedReq
 	cancel()
-
-	time.Sleep(100*time.Millisecond)
-
+	<- clientReturned
 	assert.Equal(t, 1, clientConn.closeCount)
-	assert.Error(t, <-serverErr)
-
+	serverRespond <- struct{}{}
 }
