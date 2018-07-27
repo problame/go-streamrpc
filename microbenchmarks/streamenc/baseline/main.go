@@ -1,140 +1,114 @@
 package main
 
 import (
-	flag "github.com/spf13/pflag"
-	"log"
-
-	"regexp"
-	"net"
+	"flag"
 	"io"
-	"strconv"
+	"log"
+	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"time"
-	"encoding/binary"
 )
+
+type discardWriter struct{}
+
+func (discardWriter) Write(buf []byte) (n int, err error) {
+	return len(buf), nil
+}
+
+func copybuf(w io.Writer, r io.Reader, buf []byte) (total int64) {
+	done := false
+	for !done {
+		n, err := r.Read(buf)
+		if err != nil && err != io.EOF {
+			log.Fatalf("n=%v err=%s", n, err)
+		}
+		done = err == io.EOF
+		n2, err := w.Write(buf[:n])
+		if n != n2 || err != nil {
+			log.Fatalf("n2=%v err=%s", n, err)
+		}
+		total += int64(n)
+	}
+	return total
+}
+
+var conf struct {
+	mode         string
+	listenOrDial string
+	bufsize      int
+	bytecount    int64 // server only
+	pprof        string
+}
 
 func main() {
 
-	var mode string
-	var bufsiz int
-
-	flag.StringVar(&mode, "mode", "client|server", "")
-	flag.IntVar(&bufsiz, "c.bufsiz", 1 << 21, "")
+	flag.Int64Var(&conf.bytecount, "bytecount", 1<<35, "number of bytes to transfer")
+	flag.IntVar(&conf.bufsize, "bufsize", 1<<21, "buffer size")
+	flag.StringVar(&conf.mode, "mode", "", "client|server")
+	flag.StringVar(&conf.listenOrDial, "listen", "localhost:2342", "")
+	flag.StringVar(&conf.listenOrDial, "dial", "localhost:2342", "")
+	flag.StringVar(&conf.pprof, "pprof", "localhost:8080", "pprof http listener")
 	flag.Parse()
 
-	buf := make([]byte, bufsiz)
+	go http.ListenAndServe(conf.pprof, nil)
 
-	serverRE := regexp.MustCompile(`^server:(tcp):(.*:.*)$`)
-	clientRE := regexp.MustCompile(`^client:(tcp):(.*:.*):(.*)$`)
-	switch {
-	case clientRE.MatchString(mode):
+	switch conf.mode {
+	case "server":
+		server()
+	case "client":
+		client()
+	default:
+		log.Printf("unknown mode '%s'", conf.mode)
+		log.Printf(`usage:
+    In one terminal:
+        taskset -c 0 ./baseline -mode server
+    In another terminal:
+        taskset -c 1 ./baseline -mode client < /dev/zero`)
+		os.Exit(1)
+	}
 
-		m := clientRE.FindStringSubmatch(mode)
-		nbytes, err := strconv.ParseInt(m[3], 0, 64)
-		if err != nil {
-			log.Fatal(err)
-		}
-		log.Printf("begin Dial")
-		conn, err := net.Dial(m[1], m[2])
-		if err != nil {
-			log.Fatal(err)
-		}
-		func () {
-			defer conn.Close()
-			log.Printf("begin request")
-			begin := time.Now()
+}
 
-			if err := binary.Write(conn, binary.BigEndian, nbytes); err != nil {
-				log.Fatal(err)
-			}
+func server() {
+	l, err := net.Listen("tcp", conf.listenOrDial)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer l.Close()
 
-			var n int64
-			for n < nbytes {
-				readc := int64(len(buf))
-				if nbytes - n < readc {
-					readc = nbytes - n
-				}
-
-				n1, err := conn.Read(buf[0:readc])
-				if n1 > 0 {
-					n += int64(n1)
-					n2, err := os.Stdout.Write(buf[0:n1])
-					if err != nil || n2 != n1 {
-						log.Fatal(err)
-					}
-				}
-				if err != nil {
-					if err != io.EOF {
-						log.Fatal(err)
-					}
-					break
-				}
-			}
-
-			delta := time.Now().Sub(begin)
-			byteps := float64(n) / delta.Seconds()
-			log.Printf("transferred %d bytes in %s, this amounts to %v MB/s or %v Mb/s", n, delta, byteps/1e6, (byteps/1e6)*8)
-			if err != nil {
-				log.Fatal(err)
-			}
-			if n != nbytes {
-				log.Fatalf("n = %v != %v = nbytes", n, nbytes)
-			}
-			log.Printf("request done")
-		}()
-
-	case serverRE.MatchString(mode):
-		m := serverRE.FindStringSubmatch(mode)
-		l, err := net.Listen(m[1], m[2])
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer l.Close()
-
-		for {
+	for {
+		func() {
 			conn, err := l.Accept()
 			if err != nil {
 				log.Fatal(err)
 			}
-			func() {
-				defer conn.Close()
-				log.Printf("begin ServeConn: %s", conn)
-				defer log.Printf("finished ServeConn")
+			defer conn.Close()
 
+			buf := make([]byte, conf.bufsize)
+			d := discardWriter{}
+			begin := time.Now()
+			n := copybuf(d, conn, buf[:])
+			delta := time.Now().Sub(begin)
+			txed := float64(n) / (1e6 * delta.Seconds())
+			txedBits := txed * 8
+			log.Printf("connection done: %v => %v MB/s %v Mbit/s err: %v", n, txed, txedBits, err)
+		}()
+	}
+}
 
-				var nbytes int64
-				if err := binary.Read(conn, binary.BigEndian, &nbytes); err != nil {
-					log.Fatal(err)
-				}
-				z, err := os.Open("/dev/zero")
-				if err != nil {
-					log.Fatal(err)
-				}
-				defer z.Close()
-
-				r := io.LimitReader(z, nbytes)
-				for {
-					readc := int64(len(buf))
-					n1, err := r.Read(buf[0:readc])
-					if n1 > 0 {
-						n2, err := conn.Write(buf[0:n1])
-						if err != nil || n2 != n1 {
-							log.Fatal(err)
-						}
-					}
-					if err != nil {
-						if err != io.EOF {
-							log.Fatal(err)
-						}
-						break
-					}
-				}
-			}()
-		}
-
-
-	default:
-		log.Fatal("specify -mode client|server")
+func client() {
+	c, err := net.Dial("tcp", conf.listenOrDial)
+	if err != nil {
+		log.Fatal(err)
 	}
 
+	buf := make([]byte, conf.bufsize)
+
+	r := io.LimitReader(os.Stdin, conf.bytecount)
+	before := time.Now()
+	n := copybuf(c, r, buf)
+	delta := time.Now().Sub(before)
+	log.Printf("connection done: %v bytes => %v Mbit/s", n, 8*float64(n)/(1e6*delta.Seconds()))
 }
