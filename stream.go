@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"errors"
+	"net"
 )
 
 // protocol constants, do not touch
@@ -27,7 +28,6 @@ type chunkBuffer struct {
 	csiz               uint32
 	headerLastChunkLen uint32
 	chunkLastReadLen   int
-	all                []byte
 	header             []byte
 	chunk              []byte
 }
@@ -35,10 +35,9 @@ type chunkBuffer struct {
 func newChunkBuffer(csiz uint32) chunkBuffer {
 	cbuf := chunkBuffer{
 		csiz: csiz,
-		all: make([]byte, 5 + csiz),
+		header: make([]byte, 5),
+		chunk: make([]byte, csiz),
 	}
-	cbuf.header = cbuf.all[0:5]
-	cbuf.chunk = cbuf.all[5:]
 	return cbuf
 }
 
@@ -59,13 +58,36 @@ func (b *chunkBuffer) readChunk(r io.Reader) (int64, error) {
 	return int64(n), err
 }
 
+// BuffersWriter is a public version of package net's buffersWriter.
+// TODO: Report the requirement for a public BuffersWriter to golang team, wait until implemented, then remove this
+type BuffersWriter interface {
+	WriteBuffers(buffers *net.Buffers) (int64, error)
+}
+
 func (b *chunkBuffer) flush(w io.Writer) (error) {
 	if int(b.headerLastChunkLen) != b.chunkLastReadLen {
 		panic("chunk length specified in header is inconsistent with last readChunk")
 	}
-	_, err := w.Write(b.all[0:5+b.chunkLastReadLen])
+	expLen := int64(len(b.header)) + int64(b.chunkLastReadLen)
+	iov := net.Buffers{b.header[:], b.chunk[:b.chunkLastReadLen]}
+	var (
+		n int64
+		err error
+	)
+	if bw, ok := w.(BuffersWriter); ok {
+		n, err = bw.WriteBuffers(&iov)
+	} else {
+		// use the iov.WriteTo anyways, maybe w is a net.buffersWriter after all
+		n, err = iov.WriteTo(w)
+	}
+	if err != nil {
+		return err
+	}
+	if n != expLen {
+		return io.ErrShortWrite
+	}
 	b.chunkLastReadLen = 0
-	return err
+	return nil
 }
 
 // does not return an error if r returns an error
