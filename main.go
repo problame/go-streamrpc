@@ -251,16 +251,17 @@ func (c *Conn) send(h *pdu.Header, reqStructured *bytes.Buffer, reqStream io.Rea
 	if len(hdr) > math.MaxUint32 {
 		return errors.New("marshaled header longer than allowed by protocol")
 	}
+	var hdrLenBuf [4]byte
+	binary.BigEndian.PutUint32(hdrLenBuf[:], uint32(len(hdr)))
 
-	// send it all out
-
-	if err = binary.Write(c.c, binary.BigEndian, uint32(len(hdr))); err != nil {
-		return err
+	// write it all out
+	bufsOnStack := [3][]byte{hdrLenBuf[:], hdr, reqStructured.Bytes()}
+	bufs := net.Buffers(bufsOnStack[:])
+	if h.PayloadLen == 0 {
+		// avoid that WriteBuffers makes a write attempt for empty bytes
+		bufs = bufs[0:2]
 	}
-	if _, err = io.Copy(c.c, bytes.NewReader(hdr)); err != nil {
-		return err
-	}
-	if _, err = io.Copy(c.c, reqStructured); err != nil {
+	if _, err := c.WriteBuffers(&bufs); err != nil {
 		return err
 	}
 	if (reqStream != nil) {
