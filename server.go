@@ -19,8 +19,8 @@ import (
 // resStream.Close() regardless of whether resStream.Read returned an error other than io.EOF.
 type HandlerFunc func(ctx context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error)
 
-// ServeConn consumes the rwc, i.e., it responds to requests it receives over rwc by calling handler until an
-// error on rwc.Read or rwc.Write, or a protocol error occurs.
+// ServeConn consumes the netConn, i.e., it responds to requests it receives over netConn by calling handler until an
+// error on netConn.Read or netConn.Write, or a protocol error occurs.
 // If the error is io.EOF, nil is returned. Otherwise, the returned error will be != nil.
 //
 // Note that errors returned by the handler do not cause this function to return.
