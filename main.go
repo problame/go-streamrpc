@@ -1,12 +1,10 @@
 package streamrpc
 
 import (
-	_ "github.com/problame/go-streamrpc/internal/pdu"
 	"bytes"
 	"io"
 	"github.com/problame/go-streamrpc/internal/pdu"
 	"math"
-	"github.com/golang/protobuf/proto"
 	"encoding/binary"
 	"errors"
 	"sync/atomic"
@@ -201,7 +199,7 @@ func (c *Conn) recv() (*recvResult) {
 	}
 
 	var unmarshHeader pdu.Header
-	if err := proto.Unmarshal(buf.Bytes(), &unmarshHeader); err != nil {
+	if err := pdu.UnmarshalHeader(buf.Bytes(), &unmarshHeader); err != nil {
 		return &recvResult{nil, nil, nil, errors.New("could not unmarshal header")}
 	}
 
@@ -254,7 +252,7 @@ func (c *Conn) send(h *pdu.Header, reqStructured *bytes.Buffer, reqStream io.Rea
 	h.PayloadLen = uint32(reqStructured.Len())
 	h.Stream = reqStream != nil
 
-	hdr, err := proto.Marshal(h)
+	hdr, err := h.Marshal()
 	if err != nil {
 		return err
 	}
