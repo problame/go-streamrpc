@@ -4,7 +4,7 @@ import (
 	"testing"
 	"bytes"
 	"io"
-	"github.com/pkg/errors"
+	"errors"
 	"math"
 	"os"
 	"net"

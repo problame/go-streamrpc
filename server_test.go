@@ -5,7 +5,7 @@ import (
 	"net"
 	"bytes"
 	"io"
-	"github.com/pkg/errors"
+	"errors"
 	"github.com/stretchr/testify/assert"
 	"context"
     "fmt"

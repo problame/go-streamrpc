@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"io"
 	"net"
-	"github.com/pkg/errors"
+	"errors"
 	"github.com/problame/go-streamrpc/internal/pdu"
 	"context"
     "fmt"
