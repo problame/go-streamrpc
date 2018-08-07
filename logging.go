@@ -10,11 +10,9 @@ type discardLogger struct {}
 
 func (discardLogger) Printf(fmt string, args... interface{}) {}
 
-type contextKey string
+type contextKey int
 
-var (
-	ContextKeyLogger = contextKey("logger")
-)
+const ContextKeyLogger contextKey = 0
 
 func logger(ctx context.Context) Logger {
 	logger, ok := ctx.Value(ContextKeyLogger).(Logger)
