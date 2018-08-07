@@ -17,7 +17,7 @@ import (
 // *StreamError instance when Read()ing from the *Stream.
 // To clean up resources held by resStream, ServeConn checks if resStream.(io.Closer), and if so, calls
 // resStream.Close() regardless of whether resStream.Read returned an error other than io.EOF.
-type HandlerFunc func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error)
+type HandlerFunc func(ctx context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error)
 
 // ServeConn consumes the rwc, i.e., it responds to requests it receives over rwc by calling handler until an
 // error on rwc.Read or rwc.Write, or a protocol error occurs.
@@ -25,6 +25,8 @@ type HandlerFunc func(endpoint string, reqStructured *bytes.Buffer, reqStream io
 //
 // Note that errors returned by the handler do not cause this function to return.
 // See HandlerFunc for a description of the expected behavior of handler.
+//
+// The ctx is passed through to each invocation of handler.
 func ServeConn(ctx context.Context, netConn net.Conn, config *ConnConfig, handler HandlerFunc) error {
 	log := logger(ctx)
 
@@ -49,7 +51,7 @@ func ServeConn(ctx context.Context, netConn net.Conn, config *ConnConfig, handle
 			return r.err
 		}
 
-		resStructured, resStream, err := handler(r.header.Endpoint, r.structured, r.stream)
+		resStructured, resStream, err := handler(ctx, r.header.Endpoint, r.structured, r.stream)
 		if err != nil {
 			hdr := pdu.Header{
 				EndpointError: err.Error(),

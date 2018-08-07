@@ -87,7 +87,7 @@ func testClientServer(t *testing.T, handler HandlerFunc) (client *Client) {
 
 func TestBehaviorHandlerError(t *testing.T) {
 
-	client := testClientServer(t, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
+	client := testClientServer(t, func(_ context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
 		return nil, nil, errors.New("test error")
 	})
 
@@ -110,7 +110,7 @@ func readerToString(r io.Reader) string {
 
 func TestBehaviorRequestStreamReply(t *testing.T) {
 
-	client := testClientServer(t, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
+	client := testClientServer(t, func(_ context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
 		assert.Equal(t, "foobar", endpoint)
 		assert.Equal(t, "question", reqStructured.String())
 		assert.Nil(t, reqStream)
@@ -126,7 +126,7 @@ func TestBehaviorRequestStreamReply(t *testing.T) {
 }
 
 func TestBehaviorStreamRequestReply(t *testing.T) {
-	client := testClientServer(t, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
+	client := testClientServer(t, func(_ context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
 		assert.Equal(t, "foobar", endpoint)
 		assert.Equal(t, "question", reqStructured.String())
 		assert.Equal(t, "stream", readerToString(reqStream))
@@ -141,7 +141,7 @@ func TestBehaviorStreamRequestReply(t *testing.T) {
 
 func TestBehaviorMultipleRequestsOnSameConnectionWork(t *testing.T) {
 
-	client := testClientServer(t, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
+	client := testClientServer(t, func(_ context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
 		assert.Equal(t, "foobar", endpoint)
 		assert.Equal(t, "question", reqStructured.String())
 		assert.Nil(t, reqStream)
@@ -162,7 +162,7 @@ func TestBehaviorMultipleRequestsOnSameConnectionWork(t *testing.T) {
 
 func TestBehaviorOpenStreamReturnsErrorOnOpenStream(t *testing.T) {
 
-	client := testClientServer(t, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
+	client := testClientServer(t, func(_ context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
 		return bytes.NewBufferString("structured"), sReadCloser("stream"), nil
 	})
 
@@ -183,7 +183,7 @@ func TestBehaviorOpenStreamReturnsErrorOnOpenStream(t *testing.T) {
 func TestBehaviorConcurrentRequestReplyError(t *testing.T) {
 
 	firstArrived , checkDone , firstDone := false, false, false
-	client := testClientServer(t, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
+	client := testClientServer(t, func(_ context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
 		firstArrived = true
 		for !checkDone { runtime.Gosched() }
 		// do not leave an open stream, that would cause other errors
@@ -224,7 +224,7 @@ func TestBehaviorClientClosingUnconsumedStreamClosesConnection(t *testing.T) {
 	clientConnP, serverConn := newTestPipe()
 	clientConn := &readWriteCloseRecorder{clientConnP, 0}
 
-	client := testClientServerMockConns(t, clientConn, serverConn, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
+	client := testClientServerMockConns(t, clientConn, serverConn, func(_ context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
 		return bytes.NewBufferString("structured"), sReadCloser("stream"), nil
 	})
 
@@ -244,7 +244,7 @@ func TestBehaviorClientClosesConnectionIfHandlerDoesNotCloseReqStream(t *testing
 	clientConn := &readWriteCloseRecorder{clientConnP, 0}
 	serveRes := make(chan error, 1)
 
-	client := testClientServerMockConnsServeResult(t, clientConn, serverConn, serveRes, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
+	client := testClientServerMockConnsServeResult(t, clientConn, serverConn, serveRes, func(_ context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
 		return nil, nil, errors.New("testerror")
 	})
 
@@ -283,7 +283,7 @@ func TestBehaviorServerClosesResStreamIfCloser(t *testing.T) {
 	serverRes := make(chan error, 1)
 
 	mockStream := &mockReadCloser{bytes.NewBufferString("stream"), 0, 0}
-	client := testClientServerMockConnsServeResult(t, clientConn, serverConn, serverRes, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
+	client := testClientServerMockConnsServeResult(t, clientConn, serverConn, serverRes, func(_ context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
 		return bytes.NewBufferString("structured"), mockStream, nil
 	})
 
@@ -305,7 +305,7 @@ func TestBehaviorClientContextCancelClosesConnection(t *testing.T) {
 	serverErr := make(chan error, 1)
 
 	serverReceivedReq, clientReturned, serverRespond := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	client := testClientServerMockConnsServeResult(t, clientConn, serverConn, serverErr, func(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
+	client := testClientServerMockConnsServeResult(t, clientConn, serverConn, serverErr, func(_ context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
 		serverReceivedReq <- struct{}{}
 		<-serverRespond
 		return bytes.NewBufferString("foo"), nil, nil
