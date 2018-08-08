@@ -40,6 +40,15 @@ func ServeConn(ctx context.Context, netConn net.Conn, config *ConnConfig, handle
 		}
 	}()
 
+	if err := pdu.WriteMagic(conn); err != nil {
+	    log.Printf("error writing protocol magic: %s", err)
+	    return err
+	}
+	if err := pdu.ReadMagic(conn); err != nil {
+	    log.Printf("error reading protocol magic: %s", err)
+	    return err
+	}
+
 	for {
 
 		r := conn.recv()

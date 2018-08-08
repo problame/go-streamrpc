@@ -102,6 +102,19 @@ func (m *connMan) getConn(ctx context.Context, reconnect bool) (*Conn, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		if err := pdu.WriteMagic(m.c); err != nil {
+			m.c.Close()
+			return nil, err
+		}
+		if err := pdu.ReadMagic(m.c); err != nil {
+			m.c.Close()
+			if err == pdu.InvalidMagic {
+				err = errors.New("remote does not present the expected protocol magic")
+			}
+			return nil, err
+		}
+
 		return m.c, err
 	}
 	if m.stopped {
