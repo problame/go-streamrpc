@@ -63,6 +63,13 @@ func testClientServerMockConnsServeResult(t *testing.T, clientConn, serverConn n
 		ConnConfig: connConfig,
 	}
 
+	// start server before client to avoid deadlock
+	go func() {
+		ctx := context.WithValue(context.Background(), ContextKeyLogger, testingLogger{t})
+		serveResult <- ServeConn(ctx, serverConn, connConfig, handler)
+		t.Log("serving done")
+	}()
+
 	client, err := NewClientOnConn(clientConn, clientConfig)
 	if err != nil {
 		panic(err)
@@ -70,10 +77,6 @@ func testClientServerMockConnsServeResult(t *testing.T, clientConn, serverConn n
 	if serveResult == nil {
 		serveResult = make(chan error, 1) // just forget it
 	}
-	go func() {
-		ctx := context.WithValue(context.Background(), ContextKeyLogger, testingLogger{t})
-		serveResult <- ServeConn(ctx, serverConn, connConfig, handler)
-	}()
 	return client
 }
 
