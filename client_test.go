@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"github.com/stretchr/testify/assert"
 	"io"
-	"net"
 	"context"
 	"github.com/stretchr/testify/require"
 )
@@ -21,7 +20,7 @@ func TestClientServer_Basic(t *testing.T) {
 		},
 	}
 
-	clientConn, serverConn := net.Pipe()
+	clientConn, serverConn := newTestPipe()
 	ctx := context.WithValue(context.Background(), ContextKeyLogger, testingLogger{t})
 	go ServeConn(ctx, serverConn, clientConf.ConnConfig, func(_ context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (*bytes.Buffer, io.ReadCloser, error) {
 		return bytes.NewBufferString("this is the structured response"), sReadCloser("this is the streamed response"), nil

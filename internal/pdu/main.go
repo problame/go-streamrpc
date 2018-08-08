@@ -36,6 +36,7 @@ var (
 )
 
 // Writes magic with CurrentVersion to w.
+// Any errors returned are io errors on w.
 func WriteMagic(w io.Writer) error {
 	m := newMagic(CurrentVersion)
 	b := bytes.NewBuffer(m)

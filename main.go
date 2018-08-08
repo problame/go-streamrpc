@@ -66,7 +66,11 @@ type Conn struct {
 	lastReadDL, lastWriteDL time.Time
 }
 
-// newConn only returns errors returned by config.Validate()
+// newConn performs the initial protocol handshake over c, and if successful, wraps c in the returned *Conn.
+//
+// Errors returned are either about invalid config or related to the protocol magic exchange (may include net errors).
+//
+// It is the callers responsibility to close c in case this function returns an error.
 func newConn(c net.Conn, config *ConnConfig) (*Conn, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -76,6 +80,15 @@ func newConn(c net.Conn, config *ConnConfig) (*Conn, error) {
 		config: config,
 		closed: 0,
 	}
+
+	// use conn to get deadlines configured in config
+	if err := pdu.WriteMagic(conn); err != nil {
+		return nil, fmt.Errorf("protocol handshake failed (write): %s", err)
+	}
+	if err := pdu.ReadMagic(conn); err != nil {
+		return nil, fmt.Errorf("protocol handshake failed (read): %s", err)
+	}
+
 	return conn, nil
 }
 

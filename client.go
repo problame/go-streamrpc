@@ -100,18 +100,9 @@ func (m *connMan) getConn(ctx context.Context, reconnect bool) (*Conn, error) {
 
 		m.c, err = newConn(netConn, m.cf.ConnConfig)
 		if err != nil {
-			return nil, err
-		}
-
-		if err := pdu.WriteMagic(m.c); err != nil {
-			m.c.Close()
-			return nil, err
-		}
-		if err := pdu.ReadMagic(m.c); err != nil {
-			m.c.Close()
-			if err == pdu.InvalidMagic {
-				err = errors.New("remote does not present the expected protocol magic")
-			}
+			if err := netConn.Close(); err != nil {
+				log.Printf("error closing connection after failed protocol handshake: %s", err)
+		    	}
 			return nil, err
 		}
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"errors"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"context"
     "fmt"
     "runtime"
@@ -95,7 +96,7 @@ func TestBehaviorHandlerError(t *testing.T) {
 	assert.Nil(t, stru)
 	assert.Nil(t, stre)
 	reperr, ok := err.(*RemoteEndpointError)
-	assert.True(t, ok)
+	require.True(t, ok)
 	assert.EqualError(t, reperr, "test error")
 
 }

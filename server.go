@@ -32,6 +32,9 @@ func ServeConn(ctx context.Context, netConn net.Conn, config *ConnConfig, handle
 
 	conn, err := newConn(netConn , config)
 	if err != nil {
+		if err := netConn.Close(); err != nil {
+			log.Printf("error closing connection after failed protocol handshake: %s", err)
+		}
 		return err
 	}
 	defer func() {
@@ -39,15 +42,6 @@ func ServeConn(ctx context.Context, netConn net.Conn, config *ConnConfig, handle
 			log.Printf("error closing connection: %s", err)
 		}
 	}()
-
-	if err := pdu.WriteMagic(conn); err != nil {
-	    log.Printf("error writing protocol magic: %s", err)
-	    return err
-	}
-	if err := pdu.ReadMagic(conn); err != nil {
-	    log.Printf("error reading protocol magic: %s", err)
-	    return err
-	}
 
 	for {
 
