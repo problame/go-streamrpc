@@ -100,9 +100,10 @@ func (m *connMan) getConn(ctx context.Context, reconnect bool) (*Conn, error) {
 
 		m.c, err = newConn(netConn, m.cf.ConnConfig)
 		if err != nil {
+			m.c = nil
 			if err := netConn.Close(); err != nil {
 				log.Printf("error closing connection after failed protocol handshake: %s", err)
-		    	}
+			}
 			return nil, err
 		}
 
