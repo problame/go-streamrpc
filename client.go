@@ -91,23 +91,25 @@ func (m *connMan) getConn(ctx context.Context, reconnect bool) (*Conn, error) {
         }
 
 		log := logger(ctx)
-		log.Printf("connecting to server")
+		log.Infof("connecting to server")
 
 		netConn, err := m.cn.Connect(ctx)
 		if err != nil {
 			return nil, err
 		}
 
+		log.Infof("performing handshake")
 		m.c, err = newConn(netConn, m.cf.ConnConfig)
 		if err != nil {
 			m.c = nil
 			if err := netConn.Close(); err != nil {
-				log.Printf("error closing connection after failed protocol handshake: %s", err)
+				log.Errorf("error closing connection after failed protocol handshake: %s", err)
 			}
 			return nil, err
 		}
+		log.Infof("connected")
 
-		return m.c, err
+		return m.c, nil
 	}
 	if m.stopped {
 		if m.c != nil {
@@ -153,6 +155,8 @@ func (c *Client) RequestReply(ctx context.Context, endpoint string, reqStructure
 	if err != nil {
 		return nil, nil, err
 	}
+
+	logger(ctx).Infof("request endpoint=%q", endpoint)
 
 	type result struct {
 		r *recvResult // if err == nil, this must be != nil

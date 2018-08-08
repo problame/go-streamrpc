@@ -14,11 +14,17 @@ import (
 )
 
 type testingLogger struct {
-	*testing.T
+	t *testing.T
 }
 
-func (l testingLogger) Printf(fmt string, args... interface{}) {
-	l.Logf(fmt, args...)
+var _ Logger = testingLogger{}
+
+func (l testingLogger) Infof(fmt string, args... interface{}) {
+	l.t.Logf(fmt, args...)
+}
+
+func (l testingLogger) Errorf(fmt string, args... interface{}) {
+	l.t.Logf(fmt, args...)
 }
 
 // this is terrible, but we can't use net.Pipe because it does not linger after Close
@@ -65,7 +71,7 @@ func testClientServerMockConnsServeResult(t *testing.T, clientConn, serverConn n
 
 	// start server before client to avoid deadlock
 	go func() {
-		ctx := context.WithValue(context.Background(), ContextKeyLogger, testingLogger{t})
+		ctx := ContextWithLogger(context.Background(), testingLogger{t})
 		serveResult <- ServeConn(ctx, serverConn, connConfig, handler)
 		t.Log("serving done")
 	}()

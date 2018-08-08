@@ -3,19 +3,27 @@ package streamrpc
 import "context"
 
 type Logger interface {
-	Printf(fmt string, args... interface{})
+	Infof(fmt string, args ...interface{})
+	Errorf(fmt string, args ...interface{})
 }
 
-type discardLogger struct {}
+type discardLogger struct{}
 
-func (discardLogger) Printf(fmt string, args... interface{}) {}
+func (discardLogger) Errorf(fmt string, args ...interface{}) {}
+func (discardLogger) Infof(fmt string, args ...interface{})  {}
 
 type contextKey int
 
-const ContextKeyLogger contextKey = 0
+const (
+	contextKeyLogger contextKey = iota
+)
+
+func ContextWithLogger(ctx context.Context, l Logger) context.Context {
+	return context.WithValue(ctx, contextKeyLogger, l)
+}
 
 func logger(ctx context.Context) Logger {
-	logger, ok := ctx.Value(ContextKeyLogger).(Logger)
+	logger, ok := ctx.Value(contextKeyLogger).(Logger)
 	if !ok {
 		return discardLogger{}
 	}

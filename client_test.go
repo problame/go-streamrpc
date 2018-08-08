@@ -21,7 +21,7 @@ func TestClientServer_Basic(t *testing.T) {
 	}
 
 	clientConn, serverConn := newTestPipe()
-	ctx := context.WithValue(context.Background(), ContextKeyLogger, testingLogger{t})
+	ctx := ContextWithLogger(context.Background(), testingLogger{t})
 	go ServeConn(ctx, serverConn, clientConf.ConnConfig, func(_ context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (*bytes.Buffer, io.ReadCloser, error) {
 		assert.Equal(t, "this is a stream", readerToString(reqStream))
 		reqStream.Close()

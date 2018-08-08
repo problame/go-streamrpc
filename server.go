@@ -33,13 +33,13 @@ func ServeConn(ctx context.Context, netConn net.Conn, config *ConnConfig, handle
 	conn, err := newConn(netConn , config)
 	if err != nil {
 		if err := netConn.Close(); err != nil {
-			log.Printf("error closing connection after failed protocol handshake: %s", err)
+			log.Errorf("error closing connection after failed protocol handshake: %s", err)
 		}
 		return err
 	}
 	defer func() {
 		if err :=  conn.Close(); err != nil {
-			log.Printf("error closing connection: %s", err)
+			log.Errorf("error closing connection: %s", err)
 		}
 	}()
 
@@ -54,30 +54,35 @@ func ServeConn(ctx context.Context, netConn net.Conn, config *ConnConfig, handle
 			return r.err
 		}
 
+		log.Infof("incoming request endpoint=%q", r.header.Endpoint)
+
 		resStructured, resStream, err := handler(ctx, r.header.Endpoint, r.structured, r.stream)
 		if err != nil {
+			log.Errorf("handler returned error: %q", err)
 			hdr := pdu.Header{
 				EndpointError: err.Error(),
 				Close: r.stream != nil, // handler might not have consumed r.stream yet, so the connection is in unknown state
 			}
 			if err := conn.send(&hdr, nil, nil); err != nil {
-				log.Printf("error sending handler-error response: %s", err)
+				log.Errorf("error sending handler-error response: %s", err)
 				return err
 			}
 			if hdr.Close {
-				log.Printf("closing connection after handler error on request with a stream")
+				log.Infof("closing connection after handler error on request with a stream")
 				return nil // defer will Close it
 			}
 			continue
 		}
 
+		log.Infof("start sending response")
 		hdr := pdu.Header{}
 		err = conn.send(&hdr, resStructured, resStream)
 		if closer, ok := resStream.(io.Closer); ok {
 			if err := closer.Close(); err != nil {
-				log.Printf("error closing stream returned from handler")
+				log.Errorf("error closing stream returned from handler: %s", err)
 			}
 		}
+		log.Infof("finish sending response")
 		if err != nil {
 			return err
 		}
