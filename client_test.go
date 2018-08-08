@@ -23,6 +23,8 @@ func TestClientServer_Basic(t *testing.T) {
 	clientConn, serverConn := newTestPipe()
 	ctx := context.WithValue(context.Background(), ContextKeyLogger, testingLogger{t})
 	go ServeConn(ctx, serverConn, clientConf.ConnConfig, func(_ context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (*bytes.Buffer, io.ReadCloser, error) {
+		assert.Equal(t, "this is a stream", readerToString(reqStream))
+		reqStream.Close()
 		return bytes.NewBufferString("this is the structured response"), sReadCloser("this is the streamed response"), nil
 	})
 	client, err :=  NewClientOnConn(clientConn, clientConf)
