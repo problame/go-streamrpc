@@ -166,11 +166,13 @@ func (c *Client) RequestReply(ctx context.Context, endpoint string, reqStructure
 	rchan := make(chan result, 2) // size 2 to avoid leaking goroutines while also not draining the channel (will be GCd)
 	go func() {
 		hdr := pdu.Header{Endpoint: endpoint}
-		err := conn.send(&hdr, reqStructured, reqStream)
+		err := conn.send(ctx, &hdr, reqStructured, reqStream)
+		logger(ctx).Infof("RequestReply.send returned %T %v", err, err)
 		rchan <- result{nil, err, err != nil && err != errorConcurrentSend} // FIXME: always close is correct right now because c.c.send calls writeStream which hides error returned by reqStream. However, maybe we should in fact not hide that?
 	}()
 	go func() {
-		r := conn.recv()
+		r := conn.recv(ctx)
+		logger(ctx).Infof("RequestReply.recv returned %T %v", r.err, r.err)
 		close := false
 		var err error = nil
 		if r.err != nil {
@@ -220,12 +222,12 @@ func (c *Client) RequestReply(ctx context.Context, endpoint string, reqStructure
 	return res.r.structured, res.r.stream, nil
 }
 
-func (c *Client) Close() {
+func (c *Client) Close(ctx context.Context) {
 	c.cm.stop()
 	if conn, _ := c.cm.getConn(context.Background(), false); conn != nil {
 		// ignore potential concurrent use errors
 		// FIXME: specify send timeout / do we even need this?
-		conn.send(&pdu.Header{Close: true}, nil, nil)
+		conn.send(ctx, &pdu.Header{Close: true}, nil, nil)
 		conn.Close()
 	}
 }

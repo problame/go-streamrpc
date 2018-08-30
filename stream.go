@@ -2,12 +2,13 @@ package streamrpc
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
-	"io"
-	"strings"
 	"errors"
-	"net"
 	"fmt"
+	"io"
+	"net"
+	"strings"
 )
 
 // protocol constants, do not touch
@@ -35,9 +36,9 @@ type chunkBuffer struct {
 
 func newChunkBuffer(csiz uint32) chunkBuffer {
 	cbuf := chunkBuffer{
-		csiz: csiz,
+		csiz:   csiz,
 		header: make([]byte, 5),
-		chunk: make([]byte, csiz),
+		chunk:  make([]byte, csiz),
 	}
 	return cbuf
 }
@@ -65,14 +66,14 @@ type BuffersWriter interface {
 	WriteBuffers(buffers *net.Buffers) (int64, error)
 }
 
-func (b *chunkBuffer) flush(w io.Writer) (error) {
+func (b *chunkBuffer) flush(w io.Writer) error {
 	if int(b.headerLastChunkLen) != b.chunkLastReadLen {
 		panic("chunk length specified in header is inconsistent with last readChunk")
 	}
 	expLen := int64(len(b.header)) + int64(b.chunkLastReadLen)
 	iov := net.Buffers{b.header[:], b.chunk[:b.chunkLastReadLen]}
 	var (
-		n int64
+		n   int64
 		err error
 	)
 	if bw, ok := w.(BuffersWriter); ok {
@@ -92,7 +93,7 @@ func (b *chunkBuffer) flush(w io.Writer) (error) {
 }
 
 // does not return an error if r returns an error
-func writeStream(out io.Writer, r io.Reader, csiz uint32) error {
+func writeStream(ctx context.Context, out io.Writer, r io.Reader, csiz uint32) error {
 
 	cbuf := newChunkBuffer(csiz)
 
@@ -102,9 +103,10 @@ func writeStream(out io.Writer, r io.Reader, csiz uint32) error {
 		if err != nil && err != io.EOF {
 			errmsg := err.Error()
 			streamErr := err
+			logger(ctx).Infof("writeStream: source error: %s", streamErr)
 
 			errChunk := newChunkBuffer(csiz)
-			n, err := errChunk.readChunk(strings.NewReader(errmsg));
+			n, err := errChunk.readChunk(strings.NewReader(errmsg))
 			if err != nil {
 				return err
 			}
@@ -114,6 +116,7 @@ func writeStream(out io.Writer, r io.Reader, csiz uint32) error {
 			}
 			return &SourceStreamError{streamErr}
 		} else if err == io.EOF {
+			logger(ctx).Infof("writeStream: source consumed (io.EOF reached)")
 			cbuf.prependHeader(uint32(n), STATUS_OK)
 			if err := cbuf.flush(out); err != nil {
 				return err
@@ -145,7 +148,7 @@ type streamReader struct {
 
 func newStreamReader(r io.Reader, macChunkSize uint32) *streamReader {
 	return &streamReader{
-		s: r,
+		s:     r,
 		mcsiz: macChunkSize,
 	}
 }
@@ -182,7 +185,7 @@ restart:
 			r.e = err
 			return n, err
 		}
-		if n == 0  && err == io.EOF {
+		if n == 0 && err == io.EOF {
 			r.e = err
 			return n, err
 		}
@@ -197,7 +200,7 @@ restart:
 	// read chunk header
 	var (
 		chunkLen uint32
-		status uint8
+		status   uint8
 	)
 	var hdrBuf []byte
 	if len(p) >= 5 {

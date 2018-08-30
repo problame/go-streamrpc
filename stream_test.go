@@ -10,6 +10,7 @@ import (
 	"net"
 	"strconv"
 	"fmt"
+	"context"
 )
 
 func TestStreamEncoding(t *testing.T) {
@@ -36,7 +37,7 @@ func TestStreamEncoding(t *testing.T) {
 		src := bytes.NewBuffer(test.in)
 
 		var buf bytes.Buffer
-		err := writeStream(&buf, src, test.csiz)
+		err := writeStream(context.Background(), &buf, src, test.csiz)
 		if err != nil {
 			t.Errorf("writeStream should not fail writing to bytes.Buffer")
 			continue
@@ -123,7 +124,7 @@ func TestStreamDecodingIOError(t *testing.T) {
 	{
 		data := bytes.NewBuffer(dataStr)
 		var stream bytes.Buffer
-		writeStream(&stream, data, 2)
+		writeStream(context.Background(), &stream, data, 2)
 		totalLen = stream.Len()
 	}
 
@@ -131,7 +132,7 @@ func TestStreamDecodingIOError(t *testing.T) {
 
 		data := bytes.NewBuffer(dataStr)
 		var stream bytes.Buffer
-		writeStream(&stream, data, 2)
+		writeStream(context.Background(), &stream, data, 2)
 
 		e := errors.New("subtle error")
 
@@ -164,7 +165,7 @@ func TestStreamEncodingSrcIOErrorForwarding(t *testing.T) {
 
 	chunkSize := uint32(2)
 	var out bytes.Buffer
-	err := writeStream(&out, &fdata, chunkSize)
+	err := writeStream(context.Background(), &out, &fdata, chunkSize)
 	if wrappedErr, ok := err.(*SourceStreamError); !ok || wrappedErr.StreamError != e {
 		t.Errorf("writeStream should wrap reader io errors, but got: %#v", err)
 	}
@@ -199,7 +200,7 @@ func TestStreamEncodingWriteIOError(t *testing.T) {
 			fdata := failingReader{data, readFailAt, readErr, 0}
 			var out bytes.Buffer
 			fout := failingWriter{&out, writeFailAt, writeErr, 0}
-			err := writeStream(&fout, &fdata, uint32(chunkSize))
+			err := writeStream(context.Background(), &fout, &fdata, uint32(chunkSize))
 
 			if fdata.InducedFail() && !fout.InducedFail() {
 				// expect readError
@@ -250,7 +251,7 @@ func doEncodingBenchmark(maxChunkSize uint32, copyByteCount int64, b *testing.B)
 	if b != nil {
 		b.ResetTimer()
 	}
-	writeStream(dest, io.LimitReader(src, copyByteCount), maxChunkSize)
+	writeStream(context.Background(), dest, io.LimitReader(src, copyByteCount), maxChunkSize)
 	dest.Close()
 
 	<- done
