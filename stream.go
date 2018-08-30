@@ -7,6 +7,7 @@ import (
 	"strings"
 	"errors"
 	"net"
+	"context"
 )
 
 // protocol constants, do not touch
@@ -91,7 +92,7 @@ func (b *chunkBuffer) flush(w io.Writer) (error) {
 }
 
 // does not return an error if r returns an error
-func writeStream(out io.Writer, r io.Reader, csiz uint32) error {
+func writeStream(ctx context.Context, out io.Writer, r io.Reader, csiz uint32) error {
 
 	cbuf := newChunkBuffer(csiz)
 
@@ -101,6 +102,7 @@ func writeStream(out io.Writer, r io.Reader, csiz uint32) error {
 		if err != nil && err != io.EOF {
 			errmsg := err.Error()
 			streamErr := err
+			logger(ctx).Infof("writeStream: source error: %s", streamErr)
 
 			errChunk := newChunkBuffer(csiz)
 			n, err := errChunk.readChunk(strings.NewReader(errmsg));
@@ -113,6 +115,7 @@ func writeStream(out io.Writer, r io.Reader, csiz uint32) error {
 			}
 			return &SourceStreamError{streamErr}
 		} else if err == io.EOF {
+			logger(ctx).Infof("writeStream: source consumed (io.EOF reached)")
 			cbuf.prependHeader(uint32(n), STATUS_OK)
 			if err := cbuf.flush(out); err != nil {
 				return err

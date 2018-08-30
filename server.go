@@ -78,7 +78,7 @@ func ServeConn(ctx context.Context, netConn net.Conn, config *ConnConfig, handle
 
 	for {
 
-		r := conn.recv()
+		r := conn.recv(ctx)
 		if r.err != nil {
 			if r.err == io.EOF {
 				// it's OK for the client to just hang up here, no need for Close=1 in header
@@ -115,7 +115,7 @@ func ServeConn(ctx context.Context, netConn net.Conn, config *ConnConfig, handle
 			hdr.EndpointError = err.Error()
 		}
 		log.Infof("start sending resonse")
-		sendErr := conn.send(&hdr, resStructured, resStream)
+		sendErr := conn.send(ctx, &hdr, resStructured, resStream)
 		if resStream != nil {
 			if closer, ok := resStream.(io.Closer); ok {
 				if err := closer.Close(); err != nil {

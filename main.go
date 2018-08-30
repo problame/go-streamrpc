@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"time"
+	"context"
 )
 
 type ConnConfig struct {
@@ -182,7 +183,7 @@ var (
 	errorConcurrentSend= errors.New("concurrent send on busy connection")
 )
 
-func (c *Conn) recv() (*recvResult) {
+func (c *Conn) recv(ctx context.Context) (*recvResult) {
 
 	if c.Closed() {
 		return &recvResult{nil, nil, nil, errors.New("recv on closed connection")}
@@ -252,7 +253,7 @@ func (c *Conn) recv() (*recvResult) {
 }
 
 // fills in PayloadLen and Stream of pdu.Header
-func (c *Conn) send(h *pdu.Header, reqStructured *bytes.Buffer, reqStream io.Reader) error {
+func (c *Conn) send(ctx context.Context, h *pdu.Header, reqStructured *bytes.Buffer, reqStream io.Reader) error {
 
 	if c.Closed() {
 		return errors.New("send on closed connection")
@@ -290,14 +291,17 @@ func (c *Conn) send(h *pdu.Header, reqStructured *bytes.Buffer, reqStream io.Rea
 		// avoid that WriteBuffers makes a write attempt for empty bytes
 		bufs = bufs[0:2]
 	}
+	logger(ctx).Infof("Conn.send: write out sized part")
 	if _, err := c.WriteBuffers(&bufs); err != nil {
 		return err
 	}
 	if (reqStream != nil) {
-		if err := writeStream(c, reqStream, c.config.TxChunkSize); err != nil {
+		logger(ctx).Infof("Conn.send: write stream")
+		if err := writeStream(ctx, c, reqStream, c.config.TxChunkSize); err != nil {
 			return err
 		}
 	}
+	logger(ctx).Infof("Conn.send: done")
 
 	return nil
 }

@@ -88,7 +88,7 @@ func main() {
 			if err != nil {
 				log.Fatal(err)
 			}
-			defer client.Close()
+			defer client.Close(context.Background())
 
 			rstru, rstre, err := client.RequestReply(context.Background(), "foo", bytes.NewBufferString(fmt.Sprintf("%v", nbytes)), nil)
 			if err != nil {
