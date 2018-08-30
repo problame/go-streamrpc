@@ -137,6 +137,7 @@ func TestBehaviorRequestStreamReply(t *testing.T) {
 
 func TestBehaviorStreamRequestReply(t *testing.T) {
 	client := testClientServer(t, func(_ context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
+		defer reqStream.Close()
 		assert.Equal(t, "foobar", endpoint)
 		assert.Equal(t, "question", reqStructured.String())
 		assert.Equal(t, "stream", readerToString(reqStream))
@@ -248,26 +249,26 @@ func TestBehaviorClientClosingUnconsumedStreamClosesConnection(t *testing.T) {
 	assert.Equal(t, 1, clientConn.closeCount)
 }
 
-func TestBehaviorClientClosesConnectionIfHandlerDoesNotCloseReqStream(t *testing.T) {
+func TestBehaviorServerClosesConnectionIfHandlerDoesNotCloseReqStream(t *testing.T) {
 
 	clientConnP, serverConn := newTestPipe()
 	clientConn := &readWriteCloseRecorder{clientConnP, 0}
 	serveRes := make(chan error, 1)
 
+	var handlerError = errors.New("handler error")
 	client := testClientServerMockConnsServeResult(t, clientConn, serverConn, serveRes, func(_ context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
-		return nil, nil, errors.New("testerror")
+		// server does not close reqStream
+		return nil, nil, handlerError
 	})
 
-	// send reqStream to server, but the handler doesn't consume it but returns an error instead
-	// -> the server will send the client a pdu.Header.Close = true
-	// ->-> the client will close the connection
-
-	stru, stre, err := client.RequestReply(context.Background(), "foo", bytes.NewBufferString("q"), sReadCloser("this is a stream that is never read"))
+	stru, stre, err := client.RequestReply(context.Background(), "foo", bytes.NewBufferString("q"), sReadCloser("this is never read"))
 	assert.Nil(t, stru)
 	assert.Nil(t, stre)
-	assert.EqualError(t, err, "testerror")
+	expServerErr := &HandlerInputStreamNotClosedError{HandlerError: handlerError}
+	expClientErr := &RemoteEndpointError{expServerErr.Error()}
+	assert.Equal(t, expClientErr, err)
 	assert.Equal(t, 1, clientConn.closeCount)
-	assert.Nil(t, <-serveRes) // ServeConn should return, but from a protocol point of view, things went fine
+	assert.Equal(t, expServerErr, <-serveRes) // ServeConn should return, but from a protocol point of view, things went fine
 }
 
 type mockReadCloser struct {

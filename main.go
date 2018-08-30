@@ -136,22 +136,30 @@ func (c *Conn) WriteBuffers(buffers *net.Buffers) (n int64, err error) {
 type Stream struct {
 	closed int32 // 0 = open; 1 = closed
 	r *streamReader
+	closeConnOnCloseAndUnconsumed bool
 	conn *Conn
 }
 
 // Read implements io.Reader for Stream.
 // It may return a *StreamError as error.
 func (s *Stream) Read(p []byte) (n int, err error) {
+	closed, consumed := s.State()
+	if closed || consumed {
+		return 0, io.EOF
+	}
 	return s.r.Read(p)
 }
 
+func (s *Stream) State() (closed, consumed bool) {
+	closed = atomic.LoadInt32(&s.closed) == 1
+	consumed = s.r.Consumed()
+	return
+}
 func (s *Stream) Close() error {
 	if !atomic.CompareAndSwapInt32(&s.closed, 0, 1) {
 		return nil
 	}
-	if !s.r.Consumed() {
-		// There are still chunks on Conn that belong to this stream,
-		// hence the Conn is in unknown state and must be closed.
+	if s.closeConnOnCloseAndUnconsumed && !s.r.Consumed() {
 		s.conn.Close()
 	}
 	if p := s.conn.recvBusy.CompareAndSwap(2, 0); p != 2 {

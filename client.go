@@ -214,6 +214,9 @@ func (c *Client) RequestReply(ctx context.Context, endpoint string, reqStructure
 				}
 		}
 	}
+	if res.r.stream != nil{
+		res.r.stream.closeConnOnCloseAndUnconsumed = true
+	}
 	return res.r.structured, res.r.stream, nil
 }
 
