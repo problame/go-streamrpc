@@ -7,6 +7,7 @@ import (
 	"strings"
 	"errors"
 	"net"
+	"fmt"
 )
 
 // protocol constants, do not touch
@@ -177,9 +178,17 @@ restart:
 	if r.chunkRemaining > 0 {
 		lr := io.LimitedReader{R: r.s, N: int64(r.chunkRemaining)}
 		n, err := lr.Read(p)
-		if err != nil && err != io.EOF {
+		if err != nil && err != io.EOF { // lr might return EOF even though r.s still has data
 			r.e = err
 			return n, err
+		}
+		if n == 0  && err == io.EOF {
+			r.e = err
+			return n, err
+		}
+		if n == 0 {
+			// n == 0 means no progress, cannot let that happen?
+			panic(fmt.Sprintf("%v %s", r.chunkRemaining, err))
 		}
 		r.chunkRemaining -= uint32(n)
 		return n, nil
