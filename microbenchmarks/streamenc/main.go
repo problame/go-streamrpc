@@ -24,7 +24,7 @@ type limitReadCloser struct {
 
 func (limitReadCloser) Close() error { return nil }
 
-func handleDevZeroStream(endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
+func handleDevZeroStream(ctx context.Context, endpoint string, reqStructured *bytes.Buffer, reqStream io.ReadCloser) (resStructured *bytes.Buffer, resStream io.ReadCloser, err error) {
 	streamLen, err := strconv.ParseInt(reqStructured.String(), 0, 64)
 	if err != nil {
 		return nil, nil, err
