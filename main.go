@@ -21,7 +21,7 @@ type ConnConfig struct {
 	// FIXME enforce TxHeaderMaxLen, TxStructuredMaxLen on send path
 	TxChunkSize uint32
 
-	RxTimeout, TxTimeout Timeout
+	Timeout Timeout
 }
 
 type Timeout struct {
@@ -108,27 +108,49 @@ func (c *Conn) Close() error {
 	return err
 }
 
+func (c *Conn) refreshTimeout() error {
+	return c.c.SetDeadline(c.config.Timeout.ProgressDeadline(time.Now()))
+}
+
 func (c *Conn) Read(b []byte) (n int, err error) {
-	if err := c.c.SetReadDeadline(c.config.RxTimeout.ProgressDeadline(time.Now())); err != nil {
+Refresh:
+	if err := c.refreshTimeout(); err != nil {
 		return 0, err
 	}
-	return c.c.Read(b)
+	n2, err := c.c.Read(b[n:])
+	n += n2
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() && n2 != 0 {
+		goto Refresh
+	}
+	return n, err
 }
 
 func (c *Conn) Write(b []byte) (n int, err error) {
-	if err := c.c.SetWriteDeadline(c.config.TxTimeout.ProgressDeadline(time.Now())); err != nil {
+Refresh:
+	if err := c.refreshTimeout(); err != nil {
 		return 0, err
 	}
-	return c.c.Write(b)
+	n2, err := c.c.Write(b[n:])
+	n += n2
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() && n2 != 0 {
+		goto Refresh
+	}
+	return n, err
 }
 
 var _ BuffersWriter = &Conn{}
 
 func (c *Conn) WriteBuffers(buffers *net.Buffers) (n int64, err error) {
-	if err := c.c.SetWriteDeadline(c.config.TxTimeout.ProgressDeadline(time.Now())); err != nil {
+Refresh:
+	if err := c.refreshTimeout(); err != nil {
 		return 0, err
 	}
-	return io.Copy(c.c, buffers)
+	n2, err := io.Copy(c.c, buffers) // buffers consumes itself internally, no need for buffers[n:]
+	n += n2
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() && n2 != 0 {
+		goto Refresh
+	}
+	return n, err
 }
 
 // Stream is a io.ReadCloser that provides access to the streamed part of a PDU packet.
