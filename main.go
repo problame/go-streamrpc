@@ -21,20 +21,8 @@ type ConnConfig struct {
 	// FIXME enforce TxHeaderMaxLen, TxStructuredMaxLen on send path
 	TxChunkSize uint32
 
-	Timeout Timeout
+	Timeout time.Duration
 	SendHeartbeatInterval time.Duration
-}
-
-type Timeout struct {
-	// The time allotted to a Read or Write until it must have made > 0 bytes of progress
-	Progress time.Duration
-}
-
-func (t *Timeout) ProgressDeadline(now time.Time) time.Time {
-	if t.Progress == 0 {
-		return time.Time{}
-	}
-	return now.Add(t.Progress)
 }
 
 func (c *ConnConfig) Validate() error {
@@ -52,6 +40,9 @@ func (c *ConnConfig) Validate() error {
 	}
 	if c.SendHeartbeatInterval <= 0 {
 		return errors.New("SendHeartbeatInterval must be greater than 0")
+	}
+	if c.Timeout <= 0 {
+		return errors.New("Timeout must be greater than 0")
 	}
 	return nil
 }
@@ -140,7 +131,7 @@ func (c *Conn) Close() error {
 }
 
 func (c *Conn) refreshTimeout() error {
-	return c.c.SetDeadline(c.config.Timeout.ProgressDeadline(time.Now()))
+	return c.c.SetDeadline(time.Now().Add(c.config.Timeout))
 }
 
 func (c *Conn) Read(b []byte) (n int, err error) {
@@ -252,7 +243,7 @@ func (c *Conn) recv(ctx context.Context) *recvResult {
 			// the timer expired while handling the last request, drain channel to avoid false wakeup
 			<-heartbeatTimer.C
 		}
-		heartbeatTimer.Reset(c.config.Timeout.Progress)
+		heartbeatTimer.Reset(c.config.Timeout)
 
 		select {
 		case r := <-recvChan: // ok

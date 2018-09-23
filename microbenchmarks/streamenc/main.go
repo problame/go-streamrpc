@@ -44,9 +44,8 @@ func main() {
 		RxHeaderMaxLen:       1024,
 		RxStructuredMaxLen:   1 << 16,
 		TxChunkSize:          0,
-		Timeout: streamrpc.Timeout{
-			Progress: 0,
-		},
+		Timeout: 24*time.Hour, // inf
+		SendHeartbeatInterval: 1*time.Hour, // inf
 	}
 	clientConfig := &streamrpc.ClientConfig{
 		ConnConfig: connConfig,
@@ -55,7 +54,8 @@ func main() {
 	flag.StringVar(&mode, "mode", "client|server", "")
 	flag.Uint32Var(&connConfig.TxChunkSize, "c.txcsiz", 1<<21, "")
 	flag.Uint32Var(&connConfig.RxStreamMaxChunkSize, "c.rxmaxcsiz", 1<<21, "")
-	flag.DurationVar(&connConfig.Timeout.Progress, "c.timeout.prog", 0, "")
+	flag.DurationVar(&connConfig.Timeout, "c.timeout", 24*time.Hour, "")
+	flag.DurationVar(&connConfig.Timeout, "c.heartbeat", 1*time.Hour, "")
 	flag.Parse()
 
 	go http.ListenAndServe(":8080", nil)
