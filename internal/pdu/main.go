@@ -10,6 +10,7 @@ import (
 
 // Header is en/decoded with encoding/json
 type Header struct {
+	Heartbeat     bool
 	PayloadLen    uint32
 	Stream        bool
 	Endpoint      string

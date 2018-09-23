@@ -22,6 +22,7 @@ type ConnConfig struct {
 	TxChunkSize uint32
 
 	Timeout Timeout
+	SendHeartbeatInterval time.Duration
 }
 
 type Timeout struct {
@@ -49,6 +50,9 @@ func (c *ConnConfig) Validate() error {
 	if c.RxStreamMaxChunkSize <= 0 {
 		return errors.New("RxStreamMaxChunkSize must be greater than 0")
 	}
+	if c.SendHeartbeatInterval <= 0 {
+		return errors.New("SendHeartbeatInterval must be greater than 0")
+	}
 	return nil
 }
 
@@ -65,6 +69,7 @@ type Conn struct {
 	recvBusy cas // 0 usable, 1 = recv running, 2 = stream closed
 	sendBusy spinlock
 	lastReadDL, lastWriteDL time.Time
+	heartbeatGoroutineStopper chan struct{}
 }
 
 // newConn performs the initial protocol handshake over c, and if successful, wraps c in the returned *Conn.
@@ -80,6 +85,7 @@ func newConn(c net.Conn, config *ConnConfig) (*Conn, error) {
 		c: c,
 		config: config,
 		closed: 0,
+		heartbeatGoroutineStopper: make(chan struct{}),
 	}
 
 	// use conn to get deadlines configured in config
@@ -89,6 +95,30 @@ func newConn(c net.Conn, config *ConnConfig) (*Conn, error) {
 	if err := pdu.ReadMagic(conn); err != nil {
 		return nil, fmt.Errorf("protocol handshake failed (read): %s", err)
 	}
+
+	go func() {
+		t := time.NewTicker(config.SendHeartbeatInterval)
+		defer t.Stop()
+		outer:
+		for {
+			select {
+			case <-t.C:
+				hdr := pdu.Header{Heartbeat: true}
+				err := conn.send(context.Background(), &hdr, nil, nil)
+				if err == nil {
+					continue outer
+				}
+				if err == errorConcurrentSend {
+					// remote won't expect hearbeat anyway
+					continue outer
+				}
+				// sending the hearbeat failed for some reason, but let's the consumer deal with this when
+				// they use this *Conn next time
+			case <-conn.heartbeatGoroutineStopper:
+				break outer
+			}
+		}
+	}()
 
 	return conn, nil
 }
@@ -104,6 +134,7 @@ func (c *Conn) Close() error {
 		// someone else closed it already
 		return nil
 	}
+	close(c.heartbeatGoroutineStopper)
 	err := c.c.Close()
 	return err
 }
@@ -205,7 +236,37 @@ var (
 	errorConcurrentSend= errors.New("concurrent send on busy connection")
 )
 
-func (c *Conn) recv(ctx context.Context) (*recvResult) {
+func (c *Conn) recv(ctx context.Context) *recvResult {
+	heartbeatTimer := time.NewTimer(0)
+	defer heartbeatTimer.Stop()
+	waitForNonHeartbeat:
+	for {
+
+		recvChan := make(chan *recvResult, 1)
+
+		go func() {
+			recvChan<-c.recvWithHeartbeats(ctx)
+		}()
+
+		if !heartbeatTimer.Stop() {
+			// the timer expired while handling the last request, drain channel to avoid false wakeup
+			<-heartbeatTimer.C
+		}
+		heartbeatTimer.Reset(c.config.Timeout.Progress)
+
+		select {
+		case r := <-recvChan: // ok
+			if r.header != nil && r.header.Heartbeat {
+				continue waitForNonHeartbeat
+			}
+			return r
+		case <-heartbeatTimer.C:
+			return &recvResult{err:fmt.Errorf("heartbeat timeout")}
+		}
+	}
+}
+
+func (c *Conn) recvWithHeartbeats(ctx context.Context) *recvResult {
 
 	if c.Closed() {
 		return &recvResult{nil, nil, nil, errors.New("recv on closed connection")}
