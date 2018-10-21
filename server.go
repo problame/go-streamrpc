@@ -62,6 +62,9 @@ func (e *HandlerInputStreamNotFullyConsumed) Error() string {
 func ServeConn(ctx context.Context, netConn net.Conn, config *ConnConfig, handler HandlerFunc) error {
 	log := logger(ctx)
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	conn, err := newConn(netConn , config)
 	if err != nil {
 		if err := netConn.Close(); err != nil {
