@@ -63,6 +63,32 @@ type Conn struct {
 	heartbeatGoroutineStopper chan struct{}
 }
 
+
+type HandshakeError struct {
+	Op string
+	Err error
+}
+
+func (e *HandshakeError) Error() string {
+	return fmt.Sprintf("protocol handshake failed (%s): %s", e.Op, e.Err)
+}
+
+func (e *HandshakeError) Timeout() bool {
+	if neterr, ok := e.Err.(net.Error); ok {
+		return neterr.Timeout()
+	}
+	return false
+}
+
+func (e *HandshakeError) Temporary() bool {
+	if neterr, ok := e.Err.(net.Error); ok {
+		return neterr.Temporary()
+	}
+	return false
+}
+
+var _ Error = &HandshakeError{}
+
 // newConn performs the initial protocol handshake over c, and if successful, wraps c in the returned *Conn.
 //
 // Errors returned are either about invalid config or related to the protocol magic exchange (may include net errors).
@@ -81,10 +107,10 @@ func newConn(c net.Conn, config *ConnConfig) (*Conn, error) {
 
 	// use conn to get deadlines configured in config
 	if err := pdu.WriteMagic(conn); err != nil {
-		return nil, fmt.Errorf("protocol handshake failed (write): %s", err)
+		return nil, &HandshakeError{"write", err}
 	}
 	if err := pdu.ReadMagic(conn); err != nil {
-		return nil, fmt.Errorf("protocol handshake failed (read): %s", err)
+		return nil, &HandshakeError{"read", err}
 	}
 
 	go func() {
