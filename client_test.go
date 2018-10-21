@@ -7,6 +7,7 @@ import (
 	"io"
 	"context"
 	"github.com/stretchr/testify/require"
+	"time"
 )
 
 func TestClientServer_Basic(t *testing.T) {
@@ -17,6 +18,8 @@ func TestClientServer_Basic(t *testing.T) {
 			RxHeaderMaxLen: 1024,
 			RxStructuredMaxLen: 64*1024,
 			TxChunkSize: 4,
+			Timeout: 10*time.Second,
+			SendHeartbeatInterval: 5*time.Second,
 		},
 	}
 

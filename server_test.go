@@ -11,6 +11,7 @@ import (
 	"context"
     "fmt"
     "runtime"
+	"time"
 )
 
 type testingLogger struct {
@@ -64,6 +65,8 @@ func testClientServerMockConnsServeResult(t *testing.T, clientConn, serverConn n
 		RxHeaderMaxLen:       1024,
 		RxStructuredMaxLen:   64 * 1024,
 		TxChunkSize:          4,
+		Timeout: 10*time.Second,
+		SendHeartbeatInterval: 5*time.Second,
 	}
 	clientConfig := &ClientConfig{
 		ConnConfig: connConfig,
