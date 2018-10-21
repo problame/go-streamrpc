@@ -227,9 +227,32 @@ var (
 	errorConcurrentSend= errors.New("concurrent send on busy connection")
 )
 
+type Error interface {
+	net.Error
+}
+
+type HearbeatTimeoutErr struct {
+	lastAt time.Time
+	timeout time.Duration
+}
+
+var _ Error = &HearbeatTimeoutErr{}
+
+func (e *HearbeatTimeoutErr) Error() string {
+	return fmt.Sprintf("heartbeat timeout (expecting every %s, last at %s)",
+		e.timeout, e.lastAt.Format(time.RFC3339))
+}
+
+func (*HearbeatTimeoutErr) Timeout() bool { return true }
+
+func (*HearbeatTimeoutErr) Temporary() bool { return true }
+
+var _ net.Error = &HearbeatTimeoutErr{}
+
 func (c *Conn) recv(ctx context.Context) *recvResult {
 	heartbeatTimer := time.NewTimer(0)
 	defer heartbeatTimer.Stop()
+	var lastHeartbeatAt time.Time
 	waitForNonHeartbeat:
 	for {
 
@@ -248,11 +271,12 @@ func (c *Conn) recv(ctx context.Context) *recvResult {
 		select {
 		case r := <-recvChan: // ok
 			if r.header != nil && r.header.Heartbeat {
+				lastHeartbeatAt = time.Now()
 				continue waitForNonHeartbeat
 			}
 			return r
 		case <-heartbeatTimer.C:
-			return &recvResult{err:fmt.Errorf("heartbeat timeout")}
+			return &recvResult{err:&HearbeatTimeoutErr{lastAt: lastHeartbeatAt, timeout: c.config.Timeout}}
 		}
 	}
 }
